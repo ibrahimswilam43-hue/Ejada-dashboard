@@ -1,4 +1,4 @@
-"""بناء داشبورد HTML تحفيزي لأفضل موظف تحصيل (ملف واحد مستقل يُعرض على شاشة الشركة)."""
+"""بناء داشبورد HTML (أبيض على كحلي) لأفضل موظف تحصيل، يدعم أكتر من شركة (شيت لكل شركة)."""
 import base64
 import datetime
 import html
@@ -10,26 +10,40 @@ import pandas as pd
 from PIL import Image, ImageOps
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-ASSETS = os.path.join(BASE, "assets")
-EJADA_LOGO = os.path.join(ASSETS, "ejada_logo.png")
-AVATARS = {"ذكر": os.path.join(ASSETS, "avatar_male.jpg"),
-           "أنثى": os.path.join(ASSETS, "avatar_female.jpg")}
+EJADA_LOGO = os.path.join(BASE, "assets", "ejada_logo.png")
 
 PERIODS = {
     "يومي": ("نجم تحصيل اليوم", "التحصيل اليومي"),
     "أسبوعي": ("نجم تحصيل الأسبوع", "التحصيل الأسبوعي"),
     "شهري": ("نجم تحصيل الشهر", "التحصيل الشهري"),
 }
+MODES = {
+    "عرض التقدم": "progress",
+    "عرض النهاية (الأفضل)": "finale",
+    "الاتنين بالتبديل التلقائي": "both",
+}
 TOTAL_WORDS = {"الإجمالي", "الاجمالي", "اجمالي", "إجمالي", "المجموع", "مجموع",
                "total", "grand total", "sum"}
 
+FOOTER_ITEMS = [
+    ("pin", "Riyadh - Al Narjis District – Rabah AlLakhmi Street"),
+    ("globe", "www.ejaada.sa"),
+    ("mail", "info@ejaada.sa"),
+    ("phone", "9200 13057"),
+    (None, "CR 1010344350"),
+]
+ICONS = {
+    "pin": '<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 5.2 7 13 7 13s7-7.8 7-13c0-3.9-3.1-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>',
+    "globe": '<svg viewBox="0 0 24 24" style="fill:none;stroke:#fff;stroke-width:2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg>',
+    "mail": '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M3 7l9 6 9-6" style="fill:none;stroke:#13204F;stroke-width:2"/></svg>',
+    "phone": '<svg viewBox="0 0 24 24"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.6 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.46.6 3.6a1 1 0 0 1-.25 1z"/></svg>',
+}
+
 
 # ---------------------------------------------------------------- البيانات
-def load_data(file) -> pd.DataFrame:
-    """أول عمودين: الموظف - التحصيل. يرجع الجدول مرتبًا من الأعلى للأقل."""
-    df = pd.read_excel(file)
+def _clean(df: pd.DataFrame) -> pd.DataFrame:
     if df.shape[1] < 2:
-        raise ValueError("الملف لازم يحتوي على عمودين: الموظف والتحصيل.")
+        raise ValueError("لازم عمودين: الموظف والتحصيل.")
     df = df.iloc[:, :2].copy()
     df.columns = ["emp", "amount"]
     df["emp"] = df["emp"].astype(str).str.strip()
@@ -41,9 +55,21 @@ def load_data(file) -> pd.DataFrame:
     df = df.dropna(subset=["amount"])
     df = df[~df["emp"].str.lower().isin(TOTAL_WORDS | {"", "nan", "none"})]
     if df.empty:
-        raise ValueError("مفيش بيانات صالحة في الملف (تأكد إن العمود التاني أرقام).")
+        raise ValueError("مفيش بيانات صالحة (تأكد إن العمود التاني أرقام).")
     df = df.groupby("emp", as_index=False, sort=False)["amount"].sum()
     return df.sort_values("amount", ascending=False).reset_index(drop=True)
+
+
+def load_workbook(file):
+    """كل شيت = شركة. يرجع ({اسم الشيت: جدول مرتب}, {اسم الشيت: سبب التجاهل})."""
+    xl = pd.ExcelFile(file)
+    ok, bad = {}, {}
+    for sh in xl.sheet_names:
+        try:
+            ok[sh] = _clean(xl.parse(sh))
+        except Exception as e:  # noqa: BLE001
+            bad[sh] = str(e)
+    return ok, bad
 
 
 # ---------------------------------------------------------------- الصور
@@ -51,69 +77,33 @@ def _data_uri(raw: bytes, mime: str) -> str:
     return f"data:{mime};base64," + base64.b64encode(raw).decode()
 
 
-def file_uri(path: str, mime: str) -> str:
-    with open(path, "rb") as f:
-        return _data_uri(f.read(), mime)
+def ejada_white_uri() -> str:
+    """لوجو إجادة أبيض (للخلفية الكحلي) مقصوص من الفراغات."""
+    src = Image.open(EJADA_LOGO).convert("RGBA")
+    alpha = src.split()[3]
+    if alpha.getextrema()[0] == 255:  # لو الملف بخلفية بيضاء مش شفافة
+        alpha = ImageOps.invert(src.convert("L")).point(lambda p: 0 if p < 30 else min(255, p * 2))
+    white = Image.new("RGBA", src.size, (255, 255, 255, 255))
+    white.putalpha(alpha)
+    bbox = alpha.point(lambda p: 255 if p > 20 else 0).getbbox()
+    if bbox:
+        white = white.crop(bbox)
+    white.thumbnail((700, 700))
+    buf = io.BytesIO()
+    white.save(buf, "PNG")
+    return _data_uri(buf.getvalue(), "image/png")
 
 
-def _jpeg_uri(img: Image.Image) -> str:
+def photo_uri(raw: bytes) -> str:
+    """صورة الموظف المرفوعة: قص مربع."""
+    img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
+    img = ImageOps.fit(img, (600, 600), centering=(0.5, 0.35))
     buf = io.BytesIO()
     img.save(buf, "JPEG", quality=88)
     return _data_uri(buf.getvalue(), "image/jpeg")
 
 
-def ejada_uri() -> str:
-    """لوجو إجادة بعد قص المساحة البيضاء الزايدة حواليه."""
-    src = Image.open(EJADA_LOGO).convert("RGBA")
-    img = Image.new("RGB", src.size, (255, 255, 255))  # الخلفية الشفافة -> بيضاء
-    img.paste(src, mask=src.split()[3])
-    bbox = ImageOps.invert(img.convert("L")).point(lambda p: 255 if p > 40 else 0).getbbox()
-    if bbox:
-        pad = 14
-        l, t, r, b = bbox
-        img = img.crop((max(l - pad, 0), max(t - pad, 0), min(r + pad, img.width), min(b + pad, img.height)))
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return _data_uri(buf.getvalue(), "image/png")
-
-
-def company_logo_uri(raw: bytes) -> str:
-    """أي لوجو: يتشال منه الفراغ (الأبيض/الشفاف) حواليه، وبعدين يتحط في إطار ثابت بالـ contain."""
-    src = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGBA")
-    flat = Image.new("RGBA", src.size, (255, 255, 255, 255))
-    flat.alpha_composite(src)
-    rgb = flat.convert("RGB")
-    bbox = ImageOps.invert(rgb.convert("L")).point(lambda p: 255 if p > 25 else 0).getbbox()
-    if bbox:
-        l, t, r, b = bbox
-        pad = int(max(r - l, b - t) * 0.03)
-        rgb = rgb.crop((max(l - pad, 0), max(t - pad, 0), min(r + pad, rgb.width), min(b + pad, rgb.height)))
-    rgb.thumbnail((900, 900))
-    buf = io.BytesIO()
-    rgb.save(buf, "PNG")
-    return _data_uri(buf.getvalue(), "image/png")
-
-
-def avatar_uri(gender: str) -> str:
-    """يقص الأفاتار حوالين الشكل نفسه عشان يبان كبير ومتوسّط جوه الدايرة."""
-    img = Image.open(AVATARS[gender]).convert("RGB")
-    mask = img.convert("L").point(lambda p: 255 if p < 140 else 0)
-    bbox = mask.getbbox() or (0, 0, img.width, img.height)
-    l, t, r, b = bbox
-    cx, cy = (l + r) // 2, (t + b) // 2
-    side = int(max(r - l, b - t) * 1.3)
-    canvas = Image.new("RGB", (side, side), (255, 255, 255))
-    canvas.paste(img, (-(cx - side // 2), -(cy - side // 2)))
-    return _jpeg_uri(canvas.resize((600, 600)))
-
-
-def photo_uri(raw: bytes) -> str:
-    """صورة الموظف المرفوعة: قص مربع من المنتصف."""
-    img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
-    return _jpeg_uri(ImageOps.fit(img, (600, 600), centering=(0.5, 0.35)))
-
-
-# ---------------------------------------------------------------- الداشبورد
+# ---------------------------------------------------------------- أدوات
 def _fmt(v: float) -> str:
     return f"{v:,.0f}"
 
@@ -122,70 +112,141 @@ def _pct(v: float, target: float) -> int:
     return int(math.floor(v / target * 100)) if target > 0 else 0
 
 
-def _cheer(pct: int) -> str:
-    if pct >= 100:
-        return "تجاوز التارجت! أداء استثنائي يستحق التصفيق"
-    if pct >= 80:
-        return "على بُعد خطوة واحدة من التارجت، ما شاء الله"
-    if pct >= 50:
-        return "أداء قوي وإصرار واضح، كمّل يا بطل"
-    return "الأعلى تحصيلًا هذه الفترة، والقادم أجمل"
+def _short(name: str) -> str:
+    parts = name.split()
+    if not parts:
+        return name
+    if parts[0] in ("عبد", "أبو", "ابو", "أم", "ام") and len(parts) > 1:
+        return f"{parts[0]} {parts[1]}"
+    return parts[0]
 
 
-def build_html(df: pd.DataFrame, company: str, period: str, target: float,
-               currency: str, gender: str, photo: bytes | None = None,
-               company_logo: tuple | None = None, date: datetime.date | None = None) -> str:
-    """company_logo = (bytes, mime) أو None. photo = bytes أو None."""
+def _avatar(photo_src=None) -> str:
+    if photo_src:
+        return f'<img src="{photo_src}" alt="">'
+    return '<svg class="ua" aria-hidden="true"><use href="#user"/></svg>'
+
+
+# ---------------------------------------------------------------- الشرائح
+def _finale(df, target, cur, photo_src, title, sub):
+    esc = html.escape
+    m = min(3, len(df))
+    cols = []
+    order = (1, 0, 2) if m == 3 else tuple(range(m))  # RTL: الثاني يمين، الأول وسط، الثالث شمال
+    for k in order:
+        r = df.iloc[k]
+        p = _pct(r.amount, target)
+        rank = k + 1
+        crown = pill = ""
+        if rank == 1:
+            crown = ('<svg class="crown" viewBox="0 0 72 48" aria-hidden="true"><path d="M6 40 L12 12 L26 26 L36 6 L46 26 L60 12 L66 40 Z"/>'
+                     '<path d="M6 45 H66"/></svg>')
+            pill = '<span class="pill">أفضل موظف تحصيل</span>'
+            meta = f'<b>{p}%</b> من التارجت البالغ {_fmt(target)} {esc(cur)}'
+        else:
+            meta = f'<b>{p}%</b> من التارجت'
+        cols.append(f"""
+        <div class="pod r{rank}">
+          {crown}
+          <div class="halo"><div class="avring">{_avatar(photo_src if rank == 1 else None)}</div></div>
+          {pill}
+          <h3 class="pn">{esc(r.emp)}</h3>
+          <div class="pa"><b>{_fmt(r.amount)}</b><small>{esc(cur)}</small></div>
+          <div class="pbar"><i style="--w:{min(p, 100)}%"></i></div>
+          <p class="pm">{meta}</p>
+          <div class="block">{rank}</div>
+        </div>""")
+    return (f'<div class="slide" data-k="finale" data-title="{esc(title, True)}" data-sub="{esc(sub, True)}">'
+            f'<div class="podium">{"".join(cols)}</div></div>')
+
+
+def _progress(df, target, cur, top_n, photo_src, sub):
+    esc = html.escape
+    rows = df.head(top_n)
+    pcts = [r.amount / target * 100 for r in rows.itertuples()]
+    scale = max(100.0, max(pcts))
+    over = scale > 100
+    cols = []
+    for idx, (r, p) in enumerate(zip(rows.itertuples(), pcts)):
+        cols.append(f"""
+        <div class="col">
+          <span class="pct">{int(math.floor(p))}%</span>
+          <div class="track{' tl' if over else ''}" style="--tl:{100 / scale * 100:.2f}%"><i style="--h:{p / scale * 100:.2f}%"></i></div>
+          <div class="avs">{_avatar(photo_src if idx == 0 else None)}</div>
+          <span class="nm" title="{esc(r.emp, True)}">{esc(_short(r.emp))}</span>
+        </div>""")
+    legend = '<span class="legend"><u></u> الخط المتقطع = التارجت</span>' if over else ""
+    return (f'<div class="slide" data-k="progress" data-title="أرقام تتحرك... ونتائج تقول مين الأقوى" data-sub="{esc(sub, True)}">'
+            f'<div class="chart">{legend}<div class="bars"><div class="arrow"></div>{"".join(cols)}</div>'
+            f'<p class="cheer">خلّو حماسكم يتكلم، وورّونا إلى وين تقدرون توصلون في <b>تحقيق أعلى نسبة تحصيل!</b></p></div></div>')
+
+
+# ---------------------------------------------------------------- الصفحة
+def build_html(companies, period, mode, currency, top_n=15, confetti=False, date=None) -> str:
+    """companies = [{name, df, target, photo(bytes|None)}] بالترتيب اللي هيتعرض."""
     esc = html.escape
     date = date or datetime.date.today()
     headline, period_label = PERIODS[period]
+    start = "finale" if mode == "finale" else "progress"
+    ds = date.strftime("%d/%m/%Y")
 
-    top = df.iloc[0]
-    champ_pct = _pct(top.amount, target)
-    champ_img = photo_uri(photo) if photo else avatar_uri(gender)
-    ejada = ejada_uri()
+    sections, first_title, first_sub = [], "", ""
+    for i, c in enumerate(companies):
+        df, target = c["df"], c["target"]
+        photo_src = photo_uri(c["photo"]) if c.get("photo") else None
+        n = len(df)
+        shown = min(top_n, n)
+        count_txt = f"أعلى {shown} من {n} موظف" if n > shown else f"{n} موظف"
+        sub_p = f"{period_label} · {count_txt} · إجمالي التحصيل {_fmt(df.amount.sum())} {currency}"
+        sub_f = f"{period_label} · أعلى {min(3, n)} في التحصيل · بتاريخ {ds}"
+        slides = ""
+        if mode in ("progress", "both"):
+            slides += _progress(df, target, currency, top_n, photo_src, sub_p)
+        if mode in ("finale", "both"):
+            slides += _finale(df, target, currency, photo_src, headline, sub_f)
+        sections.append(f'<section class="co" data-name="{esc(c["name"], True)}">{slides}</section>')
+        if i == 0:
+            first_title = "أرقام تتحرك... ونتائج تقول مين الأقوى" if start == "progress" else headline
+            first_sub = sub_p if start == "progress" else sub_f
 
-    # شعار/اسم الشركة على جنب
-    if company_logo:
-        client_block = (f'<div class="client-logo"><img alt="{esc(company)}" '
-                        f'src="{company_logo_uri(company_logo[0])}"></div>')
+    names = [c["name"] for c in companies]
+    chev_r = '<svg viewBox="0 0 24 24"><polyline points="9 5 16 12 9 19"/></svg>'
+    chev_l = '<svg viewBox="0 0 24 24"><polyline points="15 5 8 12 15 19"/></svg>'
+    caret = '<svg class="caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>'
+    if len(names) == 1:
+        switch = f'<div class="switch"><span class="name static"><span class="nt" id="coName">{esc(names[0])}</span></span></div>'
     else:
-        client_block = f'<div class="client-logo text">{esc(company)}</div>'
+        items = "".join(f'<li data-i="{i}"><button type="button">{esc(n)}</button></li>' for i, n in enumerate(names))
+        switch = (
+            '<div class="switch">'
+            f'<button class="nav" id="prev" type="button" aria-label="الشركة السابقة">{chev_r}</button>'
+            f'<div class="pick"><button class="name" id="coBtn" type="button" aria-haspopup="true">'
+            f'<span class="nt" id="coName">{esc(names[0])}</span>{caret}</button>'
+            f'<ul class="list" id="coList" hidden>{items}</ul></div>'
+            f'<button class="nav" id="next" type="button" aria-label="الشركة التالية">{chev_l}</button>'
+            f'<span class="cnt" id="coCnt">1 / {len(names)}</span></div>')
 
-    # أعلى 3
-    medals = ["gold", "silver", "bronze"]
-    rows = []
-    for i, r in df.head(3).iterrows():
-        p = _pct(r.amount, target)
-        rows.append(f"""
-        <li class="row {medals[i]}{' lead' if i == 0 else ''}">
-          <span class="medal">{i + 1}</span>
-          <div class="who"><b>{esc(r.emp)}</b>
-            <span class="meter"><i style="width:{min(p, 100)}%"></i></span></div>
-          <div class="val"><b>{_fmt(r.amount)}</b><small>{p}% من التارجت</small></div>
-        </li>""")
+    tabs = ""
+    if mode == "both":
+        tabs = ('<div class="tabs"><button type="button" data-k="progress" class="on">التقدم</button>'
+                '<button type="button" data-k="finale">النهاية</button></div>')
 
-    total = df.amount.sum()
+    foot = "".join(f'<span>{ICONS.get(ic, "")}{esc(tx)}</span>' for ic, tx in FOOTER_ITEMS)
+    canvas = '<canvas id="cf"></canvas>' if confetti else ""
+
     page = TEMPLATE
     for k, v in {
-        "__TITLE__": esc(f"{headline} - {company}"),
-        "__EJADA__": ejada,
-        "__HEADLINE__": esc(headline),
-        "__SUBTITLE__": esc(f"{period_label} بتاريخ {date.strftime('%d/%m/%Y')}"),
-        "__COMPANY__": esc(company),
-        "__CLIENT_BLOCK__": client_block,
-        "__CHAMP_IMG__": champ_img,
-        "__NAME__": esc(top.emp),
-        "__AMOUNT__": _fmt(top.amount),
-        "__CUR__": esc(currency),
-        "__BAR__": str(min(champ_pct, 100)),
-        "__PCT__": str(champ_pct),
-        "__TARGET__": _fmt(target),
-        "__CHEER__": esc(_cheer(champ_pct)),
-        "__ROWS__": "".join(rows),
-        "__COUNT__": str(len(df)),
-        "__TOTAL__": _fmt(total),
-        "__TOTAL_PCT__": str(_pct(total, target * len(df))),
+        "__TITLE__": esc(f"{headline} - {', '.join(names)}"),
+        "__LOGO__": ejada_white_uri(),
+        "__SWITCH__": switch,
+        "__H1__": esc(first_title),
+        "__SUB__": esc(first_sub),
+        "__TABS__": tabs,
+        "__SECTIONS__": "".join(sections),
+        "__FOOT__": foot,
+        "__CANVAS__": canvas,
+        "__MODE__": mode,
+        "__CONF__": "true" if confetti else "false",
     }.items():
         page = page.replace(k, v)
     return page
@@ -201,225 +262,206 @@ TEMPLATE = r"""<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@500;700;900&display=swap" rel="stylesheet">
 <style>
-:root{
-  --ink:#050F26; --navy:#0B1D42; --royal:#1E3A6B; --sky:#6FA8FF;
-  --gold:#F2B93B; --gold-hi:#FFE29A; --gold-lo:#B9801A; --ivory:#FFF8E8;
-  --silver:#C9D3E6; --bronze:#D58F55;
-}
+:root{--navy:#13204F;--deep:#0A1330;--mist:#C7D4F0;--line:rgba(255,255,255,.22);--soft:rgba(255,255,255,.10)}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
-body{font-family:'Cairo','Segoe UI',Tahoma,sans-serif;color:var(--ivory);background:var(--ink);overflow:hidden}
-img{display:block}
+body{font-family:'Cairo','Segoe UI',Tahoma,sans-serif;background:var(--deep);color:#fff;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.page{position:relative;height:100vh;min-height:560px;display:flex;flex-direction:column;padding:2.4vh 3.5vw 0;overflow:hidden;
+  background:linear-gradient(160deg,#1A2C6E 0%,var(--navy) 46%,var(--deep) 100%)}
+.orb{position:absolute;border-radius:50%;background:rgba(255,255,255,.05);pointer-events:none}
+.orb.a{width:62vh;height:62vh;left:-14vh;top:-26vh}
+.orb.b{width:82vh;height:82vh;right:-24vh;bottom:-36vh}
 
-.stage{
-  position:relative;height:100vh;min-height:560px;
-  display:grid;grid-template-rows:auto 1fr auto;gap:2vh;padding:2vh 2.4vw;
-  background:radial-gradient(110% 90% at 68% 42%,#1B3B7A 0%,#0B1D42 46%,#050F26 100%);
-}
-#confetti{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:20}
+/* ---- الفريم الرسمي: معينات ---- */
+.dm{position:absolute;width:3.4vh;height:3.4vh;background:#fff;opacity:.92;pointer-events:none;
+  clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)}
+.d1{left:calc(6.5vw - 1.7vh);top:3vh}
+.d2{left:calc(20.4vw - 1.7vh);top:3vh}.d3{left:calc(20.4vw + 1.7vh);top:3vh}
+.d4{left:calc(20.4vw + 5.1vh);top:3vh}.d5{left:calc(20.4vw + 8.5vh);top:3vh}
+.d6{left:calc(6.5vw - 1.7vh);top:78.6vh}
+.d7{left:calc(6.5vw - 1.7vh);top:91.8vh}.d8{left:calc(6.5vw - 1.7vh);top:95.2vh}
+.d9{left:calc(92.1vw - 1.7vh);top:87.2vh}.d10{left:calc(92.1vw - 1.7vh);top:90.6vh}
 
-/* ---------- الشريط العلوي ---------- */
-.top{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:2vw;position:relative;z-index:2}
-.ejada{background:#fff;border-radius:14px;padding:.8vh 1vw;box-shadow:0 6px 24px rgba(0,0,0,.35)}
-.ejada img{height:13vh;max-height:140px;width:auto}
-.heading{text-align:center}
-.heading h1{font-size:clamp(1.8rem,5.6vh,3.6rem);font-weight:900;line-height:1.15;
-  background:linear-gradient(180deg,var(--gold-hi),var(--gold) 55%,var(--gold-lo));
-  -webkit-background-clip:text;background-clip:text;color:transparent;
-  filter:drop-shadow(0 2px 14px rgba(242,185,59,.35))}
-.heading p{margin-top:.4vh;font-size:clamp(.9rem,2.2vh,1.4rem);color:#B9C9E8;font-weight:500}
-.company-pill{font-size:clamp(1rem,2.8vh,1.8rem);font-weight:700;padding:1vh 1.6vw;border-radius:999px;
-  border:1.5px solid rgba(242,185,59,.55);background:rgba(255,255,255,.06);white-space:nowrap}
+/* ---- الرأس ---- */
+.head{display:flex;align-items:flex-start;gap:2.2vw;height:16vh;position:relative;z-index:3}
+.logo img{height:14vh;width:auto;display:block}
+.tb{min-width:0;padding-top:.4vh}
+.switch{display:inline-flex;align-items:center;gap:.6vw}
+.nav{width:4vh;height:4vh;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;transition:background .2s,color .2s}
+.nav:hover,.nav:focus-visible{background:#fff;color:var(--navy);outline:none}
+.nav svg{width:52%;height:52%;fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.pick{position:relative}
+.name{display:inline-flex;align-items:center;gap:.7vw;font-weight:800;font-size:clamp(1rem,2.6vh,1.6rem);
+  padding:.4vh 1.3vw;border-radius:999px;background:var(--soft);border:1.5px solid var(--line);transition:background .2s}
+button.name:hover{background:rgba(255,255,255,.2)}
+.name .caret{width:1.5vh;height:1.5vh;fill:none;stroke:#fff;stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round}
+.cnt{font-size:clamp(.75rem,1.9vh,1.1rem);color:var(--mist);font-variant-numeric:tabular-nums;direction:ltr;unicode-bidi:isolate}
+.list{position:absolute;top:calc(100% + 1vh);inset-inline-start:0;min-width:16vw;max-height:52vh;overflow:auto;list-style:none;
+  background:#fff;color:var(--navy);border-radius:14px;padding:.8vh;box-shadow:0 18px 40px rgba(0,0,0,.45);z-index:30}
+.list[hidden]{display:none}
+.list button{display:block;width:100%;text-align:start;padding:1vh 1vw;border-radius:10px;font-weight:700;font-size:clamp(.9rem,2.2vh,1.3rem)}
+.list button:hover,.list li.cur button{background:#E4EAFA}
+h1{font-size:clamp(1.6rem,5.6vh,3.6rem);font-weight:900;line-height:1.15;margin-top:.9vh}
+.sub{margin-top:.3vh;font-size:clamp(.85rem,2.1vh,1.3rem);color:var(--mist)}
+.tabs{position:absolute;left:calc(6.5vw - 1.7vh);top:9.4vh;display:flex;gap:.3vw;padding:.4vh;border-radius:999px;
+  background:var(--soft);border:1px solid var(--line);z-index:5}
+.tabs button{padding:.5vh 1.2vw;border-radius:999px;font-weight:700;font-size:clamp(.8rem,1.9vh,1.1rem);color:var(--mist)}
+.tabs button.on{background:#fff;color:var(--navy)}
 
-/* ---------- المنطقة الرئيسية ---------- */
-.main{display:grid;grid-template-columns:1.9fr 1fr;gap:2vw;min-height:0;position:relative;z-index:2}
+/* ---- المنطقة الرئيسية ---- */
+.stage{flex:1;min-height:0;display:flex;padding:0 9vw;position:relative;z-index:2}
+.co{display:none;flex:1;min-width:0;min-height:0}
+.co.on{display:flex}
+.slide{display:none;flex:1;min-width:0;min-height:0;flex-direction:column}
+.slide.on{display:flex}
 
-.hero{position:relative;display:grid;grid-template-columns:auto 1fr;align-items:center;gap:2.4vw;
-  padding:3vh 2.4vw;border-radius:28px;min-height:0;overflow:hidden;
-  background:linear-gradient(135deg,rgba(255,255,255,.10),rgba(255,255,255,.03));
-  border:1.5px solid rgba(242,185,59,.5);
-  box-shadow:0 0 0 6px rgba(242,185,59,.06),0 30px 80px rgba(0,0,0,.45),inset 0 0 80px rgba(242,185,59,.06)}
-.rays{position:absolute;width:150vh;height:150vh;inset-inline-start:-38vh;top:50%;margin-top:-75vh;
-  background:repeating-conic-gradient(from 0deg,rgba(255,226,154,.20) 0 6deg,transparent 6deg 18deg);
-  -webkit-mask:radial-gradient(circle,#000 8%,transparent 62%);mask:radial-gradient(circle,#000 8%,transparent 62%);
-  animation:spin 60s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
+/* ---- النهاية: البوديوم ---- */
+.podium{flex:1;min-height:0;display:flex;align-items:flex-end;justify-content:center;gap:2.6vw}
+.pod{flex:1 1 0;max-width:27vw;min-width:0;display:flex;flex-direction:column;align-items:center;text-align:center}
+.r1{--av:20vh}.r2,.r3{--av:14.5vh}
+.crown{width:5.6vh;height:auto;margin-bottom:.6vh;fill:none;stroke:#fff;stroke-width:3.2;stroke-linejoin:round;stroke-linecap:round}
+.halo{padding:.9vh;border-radius:50%}
+.r1 .halo{background:rgba(255,255,255,.14)}
+.avring{width:var(--av);height:var(--av);border-radius:50%;border:.5vh solid #fff;background:var(--soft);overflow:hidden;display:grid}
+.avring img{width:100%;height:100%;object-fit:cover}
+.ua{width:100%;height:100%;fill:#fff}
+.pill{margin-top:1.2vh;padding:.5vh 1.4vw;border-radius:999px;background:#fff;color:var(--navy);font-weight:800;font-size:clamp(.8rem,2vh,1.2rem)}
+.pn{margin-top:1vh;font-weight:900;font-size:clamp(1.1rem,3.4vh,2.2rem);line-height:1.2;overflow-wrap:anywhere}
+.r1 .pn{font-size:clamp(1.4rem,4.6vh,3rem)}
+.pa{margin-top:.4vh;display:flex;align-items:baseline;gap:.5vw}
+.pa b{font-size:clamp(1.4rem,4.6vh,3rem);font-weight:900;line-height:1.1;font-variant-numeric:tabular-nums}
+.r1 .pa b{font-size:clamp(1.8rem,6vh,4rem)}
+.pa small{font-size:clamp(.8rem,2vh,1.2rem);color:var(--mist);font-weight:700}
+.pbar{width:80%;height:.9vh;min-height:5px;border-radius:99px;background:rgba(255,255,255,.22);overflow:hidden;margin-top:.9vh}
+.pbar i{display:block;height:100%;width:var(--w);background:#fff;border-radius:inherit;animation:grow 1.4s .2s cubic-bezier(.2,.8,.2,1) backwards}
+@keyframes grow{from{width:0}}
+.pm{margin-top:.7vh;font-size:clamp(.75rem,1.9vh,1.15rem);color:var(--mist)}
+.pm b{color:#fff;font-weight:900}
+.block{margin-top:1.6vh;width:100%;border-radius:22px 22px 0 0;display:grid;place-items:center;font-weight:900;line-height:1;
+  background:rgba(255,255,255,.14);border-top:2px solid rgba(255,255,255,.4)}
+.r1 .block{height:17vh;background:#fff;color:var(--navy);font-size:clamp(2.4rem,9vh,6rem);border-top:0}
+.r2 .block{height:11.5vh;font-size:clamp(1.8rem,6.5vh,4.4rem)}
+.r3 .block{height:8vh;font-size:clamp(1.4rem,4.8vh,3.2rem)}
 
-.champ{position:relative;width:min(34vh,21vw);aspect-ratio:1;margin-inline-start:3%}
-.champ .ring{position:absolute;inset:0;border-radius:50%;padding:7px;
-  background:conic-gradient(from 200deg,var(--gold-hi),var(--gold),var(--gold-lo),var(--gold-hi),var(--gold),var(--gold-hi));
-  box-shadow:0 0 60px rgba(242,185,59,.55),0 18px 50px rgba(0,0,0,.5)}
-.champ .ring img{width:100%;height:100%;border-radius:50%;object-fit:cover;background:#fff;border:5px solid #fff}
-.crown{position:absolute;top:-13%;left:50%;width:34%;transform:translateX(-50%);z-index:3;
-  filter:drop-shadow(0 6px 10px rgba(0,0,0,.45))}
-.trophy{position:absolute;bottom:-5%;inset-inline-start:-14%;width:40%;z-index:3;
-  filter:drop-shadow(0 10px 18px rgba(0,0,0,.5)) drop-shadow(0 0 22px rgba(242,185,59,.55));
-  animation:float 4s ease-in-out infinite}
-@keyframes float{50%{transform:translateY(-1.2vh)}}
+/* ---- التقدم: أعمدة ---- */
+.chart{flex:1;min-height:0;display:flex;flex-direction:column;position:relative;padding-top:1vh}
+.legend{align-self:flex-start;margin-bottom:.8vh;font-size:clamp(.7rem,1.7vh,1rem);color:var(--mist);display:flex;align-items:center;gap:.5vw}
+.legend u{display:inline-block;width:2.4vw;border-top:2px dashed rgba(255,255,255,.7)}
+.bars{flex:1;min-height:0;display:flex;justify-content:center;gap:1vw;position:relative}
+.col{position:relative;z-index:1;flex:1 1 0;max-width:8vw;min-width:0;display:flex;flex-direction:column;align-items:center}
+.pct{font-weight:900;font-size:clamp(.75rem,2.1vh,1.3rem);margin-bottom:.8vh;font-variant-numeric:tabular-nums}
+.track{flex:1;width:100%;min-height:0;border-radius:2vh;background:rgba(255,255,255,.12);position:relative;display:flex;align-items:flex-end;overflow:hidden}
+.track i{display:block;width:100%;height:var(--h);min-height:.5vh;border-radius:2vh 2vh .6vh .6vh;background:#fff;animation:rise 1.3s cubic-bezier(.2,.8,.2,1) backwards}
+@keyframes rise{from{height:0}}
+.track.tl::after{content:"";position:absolute;left:0;right:0;bottom:var(--tl);border-top:2px dashed rgba(255,255,255,.65)}
+.avs{margin-top:1.2vh;width:min(5.6vh,100%);aspect-ratio:1;border-radius:50%;border:.35vh solid #fff;background:var(--soft);overflow:hidden;display:grid;flex:none}
+.avs img{width:100%;height:100%;object-fit:cover}
+.nm{margin-top:.6vh;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700;font-size:clamp(.7rem,1.8vh,1.1rem)}
+.arrow{position:absolute;left:2%;top:64%;width:84%;height:1.6vh;border-radius:2vh;background:rgba(255,255,255,.2);
+  transform-origin:left center;transform:rotate(-13deg);pointer-events:none}
+.arrow::after{content:"";position:absolute;right:-2.4vh;top:50%;transform:translateY(-50%);
+  border-left:5vh solid rgba(255,255,255,.2);border-top:3.2vh solid transparent;border-bottom:3.2vh solid transparent}
+.cheer{margin-top:1.6vh;padding-top:1.4vh;border-top:1px solid var(--line);text-align:center;font-weight:700;font-size:clamp(.95rem,2.6vh,1.6rem)}
+.cheer b{font-weight:900}
 
-.info{position:relative;z-index:2;min-width:0}
-.tag{display:inline-block;font-weight:900;font-size:clamp(1rem,2.8vh,1.7rem);color:#2A1B00;
-  padding:.5vh 1.3vw;border-radius:999px;background:linear-gradient(180deg,var(--gold-hi),var(--gold));
-  box-shadow:0 6px 18px rgba(242,185,59,.4)}
-.name{margin-top:1.6vh;font-size:clamp(2rem,7vh,4.6rem);font-weight:900;line-height:1.15;color:#fff;
-  text-shadow:0 4px 24px rgba(0,0,0,.45);overflow-wrap:anywhere}
-.amount{margin-top:1.4vh;display:flex;align-items:baseline;gap:.7vw;flex-wrap:wrap}
-.amount .num{font-size:clamp(2.2rem,7.6vh,5rem);font-weight:900;line-height:1;color:var(--gold);
-  text-shadow:0 0 30px rgba(242,185,59,.5);font-variant-numeric:tabular-nums}
-.amount .cur{font-size:clamp(1rem,3vh,2rem);font-weight:700;color:var(--gold-hi)}
+/* ---- الفوتر ---- */
+.foot{height:8.5vh;display:flex;align-items:center;justify-content:center;gap:2.4vw;padding:0 11vw;position:relative;z-index:2;
+  font-size:clamp(.7rem,1.9vh,1.15rem);white-space:nowrap}
+.foot span{display:inline-flex;align-items:center;gap:.5vw;direction:ltr;unicode-bidi:isolate}
+.foot svg{width:2.2vh;height:2.2vh;fill:#fff;flex:none}
+#cf{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:40}
 
-.progress{margin-top:2.4vh}
-.bar{height:2.4vh;min-height:14px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden;
-  box-shadow:inset 0 2px 6px rgba(0,0,0,.4)}
-.bar i{display:block;height:100%;border-radius:inherit;width:0;
-  background:linear-gradient(90deg,var(--gold-lo),var(--gold),var(--gold-hi));
-  box-shadow:0 0 18px rgba(242,185,59,.8);animation:fill 2.2s .4s cubic-bezier(.2,.8,.2,1) forwards}
-@keyframes fill{to{width:__BAR__%}}
-.bar-meta{margin-top:1vh;font-size:clamp(.95rem,2.6vh,1.6rem);color:#D6E1F7;font-weight:500}
-.bar-meta b{font-size:1.5em;color:var(--gold-hi);font-weight:900;margin-inline-end:.4em}
-.cheer{margin-top:1.6vh;font-size:clamp(1rem,2.8vh,1.8rem);font-weight:700;color:#fff}
-
-/* ---------- لوحة أعلى 3 ---------- */
-.board{display:flex;flex-direction:column;gap:2vh;padding:2.4vh 1.6vw;border-radius:28px;min-height:0;
-  background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.03));
-  border:1.5px solid rgba(159,180,217,.3);box-shadow:0 30px 80px rgba(0,0,0,.4)}
-.client-logo{background:#fff;border-radius:18px;padding:1.6vh 1.6vw;display:flex;align-items:center;justify-content:center;
-  height:17vh;flex:none;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,.35)}
-.client-logo img{width:100%;height:100%;object-fit:contain}
-.client-logo.text{color:var(--royal);font-weight:900;font-size:clamp(1.3rem,4vh,2.6rem);text-align:center}
-.board h3{font-size:clamp(1.1rem,3.2vh,2rem);font-weight:900;color:var(--gold-hi);text-align:center}
-.rows{list-style:none;display:flex;flex-direction:column;gap:1.6vh;flex:1;min-height:0}
-.row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:1vw;flex:1;max-height:16vh;
-  padding:1.2vh 1vw;border-radius:18px;background:rgba(5,15,38,.55);border:1px solid rgba(255,255,255,.1)}
-.row.lead{background:linear-gradient(135deg,rgba(242,185,59,.28),rgba(242,185,59,.08));border-color:rgba(242,185,59,.7)}
-.medal{width:clamp(36px,6.4vh,64px);aspect-ratio:1;border-radius:50%;display:grid;place-items:center;
-  font-weight:900;font-size:clamp(1.1rem,3.2vh,2rem);color:#1d1400;box-shadow:0 4px 12px rgba(0,0,0,.4)}
-.gold .medal{background:radial-gradient(circle at 30% 25%,var(--gold-hi),var(--gold) 60%,var(--gold-lo))}
-.silver .medal{background:radial-gradient(circle at 30% 25%,#fff,var(--silver) 60%,#8392AE)}
-.bronze .medal{background:radial-gradient(circle at 30% 25%,#F6C9A0,var(--bronze) 60%,#94582B)}
-.who{min-width:0}
-.who b{display:block;font-size:clamp(1rem,2.7vh,1.7rem);font-weight:700;overflow-wrap:anywhere;line-height:1.2}
-.meter{display:block;margin-top:.8vh;height:.9vh;min-height:6px;border-radius:99px;background:rgba(255,255,255,.14);overflow:hidden}
-.meter i{display:block;height:100%;background:linear-gradient(90deg,var(--sky),#B8D2FF);border-radius:inherit}
-.gold .meter i{background:linear-gradient(90deg,var(--gold-lo),var(--gold-hi))}
-.val{text-align:end}
-.val b{display:block;font-size:clamp(1rem,2.8vh,1.8rem);font-weight:900;color:var(--gold);font-variant-numeric:tabular-nums}
-.val small{font-size:clamp(.7rem,1.7vh,1rem);color:#B9C9E8}
-
-/* ---------- الشريط السفلي ---------- */
-.foot{display:flex;justify-content:space-between;align-items:center;gap:2vw;position:relative;z-index:2;
-  padding:1.4vh 1.8vw;border-radius:18px;background:rgba(5,15,38,.6);border:1px solid rgba(159,180,217,.25);
-  font-size:clamp(.85rem,2.2vh,1.4rem);color:#D6E1F7}
-.foot b{color:var(--gold-hi);font-weight:900;font-size:1.2em;margin-inline-start:.35em}
-.foot .stats{display:flex;gap:2.4vw;flex-wrap:wrap}
-.foot .motto{font-weight:700;color:#fff}
-
-/* ---------- شاشات صغيرة ---------- */
 @media (max-width:900px){
-  body{overflow:auto}
-  .stage{height:auto}
-  .main{grid-template-columns:1fr}
-  .hero{grid-template-columns:1fr;justify-items:center;text-align:center;padding:4vh 4vw}
-  .champ{width:min(60vw,320px)}
-  .amount{justify-content:center}
-  .top{grid-template-columns:1fr;justify-items:center}
-  .foot{flex-direction:column;text-align:center}
+  body{overflow:auto}.page{height:auto;min-height:100vh}
+  .stage{padding:0 4vw}.podium{flex-direction:column;align-items:center}
+  .pod{max-width:90vw}.foot{flex-wrap:wrap;height:auto;padding:2vh 4vw}
 }
-@media (prefers-reduced-motion:reduce){
-  .rays,.trophy{animation:none}
-  .bar i{animation:none;width:__BAR__%}
-}
+@media (prefers-reduced-motion:reduce){.pbar i,.track i{animation:none}}
 </style>
 </head>
 <body>
-<div class="stage">
-  <canvas id="confetti"></canvas>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="user" viewBox="0 0 100 100">
+  <circle cx="50" cy="40" r="16"/><path d="M12 100c0-21 17-35 38-35s38 14 38 35z"/></symbol></svg>
+__CANVAS__
+<div class="page">
+  <div class="orb a"></div><div class="orb b"></div>
+  <i class="dm d1"></i><i class="dm d2"></i><i class="dm d3"></i><i class="dm d4"></i><i class="dm d5"></i>
+  <i class="dm d6"></i><i class="dm d7"></i><i class="dm d8"></i><i class="dm d9"></i><i class="dm d10"></i>
 
-  <header class="top">
-    <div class="ejada"><img src="__EJADA__" alt="إجادة لتحصيل الديون"></div>
-    <div class="heading">
-      <h1>__HEADLINE__</h1>
-      <p>__SUBTITLE__</p>
+  <header class="head">
+    <div class="logo"><img src="__LOGO__" alt="إجادة لتحصيل الديون"></div>
+    <div class="tb">
+      __SWITCH__
+      <h1 id="ttl">__H1__</h1>
+      <p class="sub" id="sub">__SUB__</p>
     </div>
-    <div class="company-pill">__COMPANY__</div>
   </header>
+  __TABS__
 
-  <main class="main">
-    <section class="hero">
-      <div class="rays" aria-hidden="true"></div>
-      <div class="champ">
-        <svg class="crown" viewBox="0 0 120 72" aria-hidden="true">
-          <defs><linearGradient id="gc" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#FFE29A"/><stop offset=".6" stop-color="#F2B93B"/><stop offset="1" stop-color="#B9801A"/>
-          </linearGradient></defs>
-          <path d="M8 62 L16 18 L42 42 L60 8 L78 42 L104 18 L112 62 Z" fill="url(#gc)"/>
-          <rect x="8" y="60" width="104" height="10" rx="4" fill="url(#gc)"/>
-          <circle cx="16" cy="15" r="6" fill="#FFE29A"/><circle cx="60" cy="6" r="7" fill="#FFE29A"/><circle cx="104" cy="15" r="6" fill="#FFE29A"/>
-        </svg>
-        <div class="ring"><img src="__CHAMP_IMG__" alt="__NAME__"></div>
-        <svg class="trophy" viewBox="0 0 200 240" aria-hidden="true">
-          <defs><linearGradient id="gt" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stop-color="#FFE29A"/><stop offset=".5" stop-color="#F2B93B"/><stop offset="1" stop-color="#B9801A"/>
-          </linearGradient></defs>
-          <path d="M50 38 H24 C24 86 40 104 64 108" fill="none" stroke="url(#gt)" stroke-width="11" stroke-linecap="round"/>
-          <path d="M150 38 H176 C176 86 160 104 136 108" fill="none" stroke="url(#gt)" stroke-width="11" stroke-linecap="round"/>
-          <path d="M46 16 H154 V80 C154 126 128 152 100 152 C72 152 46 126 46 80 Z" fill="url(#gt)"/>
-          <path d="M60 28 H76 V82 C76 112 86 128 98 138 C72 134 60 112 60 82 Z" fill="#fff" opacity=".35"/>
-          <polygon points="100,46 109,67 132,69 114,84 120,106 100,94 80,106 86,84 68,69 91,67" fill="#FFF8E8"/>
-          <rect x="86" y="150" width="28" height="36" fill="url(#gt)"/>
-          <path d="M58 188 H142 L152 214 H48 Z" fill="url(#gt)"/>
-          <rect x="40" y="212" width="120" height="20" rx="6" fill="#B9801A"/>
-          <rect x="40" y="212" width="120" height="8" rx="4" fill="#F2B93B"/>
-        </svg>
-      </div>
-      <div class="info">
-        <span class="tag">أفضل موظف تحصيل</span>
-        <h2 class="name">__NAME__</h2>
-        <div class="amount"><span class="num">__AMOUNT__</span><span class="cur">__CUR__</span></div>
-        <div class="progress">
-          <div class="bar"><i></i></div>
-          <p class="bar-meta"><b>__PCT__%</b> من التارجت البالغ __TARGET__ __CUR__</p>
-        </div>
-        <p class="cheer">__CHEER__</p>
-      </div>
-    </section>
+  <main class="stage">__SECTIONS__</main>
 
-    <aside class="board">
-      __CLIENT_BLOCK__
-      <h3>أعلى 3 في التحصيل</h3>
-      <ul class="rows">__ROWS__</ul>
-    </aside>
-  </main>
-
-  <footer class="foot">
-    <div class="stats">
-      <span>عدد المحصّلين<b>__COUNT__</b></span>
-      <span>إجمالي التحصيل<b>__TOTAL__ __CUR__</b></span>
-    </div>
-    <div class="motto">كل تحصيل خطوة، وكل خطوة تصنع فرقًا للفريق كله</div>
-  </footer>
+  <footer class="foot">__FOOT__</footer>
 </div>
 
 <script>
 (function(){
-  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  var c=document.getElementById('confetti'), x=c.getContext('2d'), W, H, P=[];
-  var colors=['#F2B93B','#FFE29A','#FFFFFF','#6FA8FF','#3F6FD1'];
-  function size(){W=c.width=innerWidth;H=c.height=innerHeight}
-  addEventListener('resize',size); size();
-  function burst(n){
-    for(var i=0;i<n;i++) P.push({x:Math.random()*W,y:-20-Math.random()*H*.35,
-      vx:(Math.random()-.5)*3,vy:2+Math.random()*4,s:6+Math.random()*8,r:Math.random()*6.28,
-      vr:(Math.random()-.5)*.3,c:colors[(Math.random()*colors.length)|0]});
+  var MODE='__MODE__', CONF=__CONF__;
+  var cos=[].slice.call(document.querySelectorAll('.co')), n=cos.length, ci=0;
+  var cur=(MODE==='finale')?'finale':'progress', timer=null;
+  var $=function(id){return document.getElementById(id)};
+  var nameEl=$('coName'), cntEl=$('coCnt'), list=$('coList'), btn=$('coBtn');
+  var tabs=[].slice.call(document.querySelectorAll('.tabs button'));
+
+  /* كونفيتي هادي (اختياري) */
+  var cv=$('cf'), cx=cv&&cv.getContext('2d'), P=[], run=false, W=0, H=0;
+  var colors=['#FFFFFF','#C7D4F0','#8FA8E0'];
+  function burst(){
+    if(!cv||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+    W=cv.width=innerWidth;H=cv.height=innerHeight;
+    for(var i=0;i<140;i++)P.push({x:Math.random()*W,y:-20-Math.random()*H*.3,vx:(Math.random()-.5)*2.4,vy:2+Math.random()*3,
+      s:5+Math.random()*7,r:Math.random()*6.28,vr:(Math.random()-.5)*.25,c:colors[(Math.random()*3)|0]});
+    if(!run){run=true;tick();}
   }
   function tick(){
-    x.clearRect(0,0,W,H);
-    for(var i=0;i<P.length;i++){var p=P[i];p.x+=p.vx;p.y+=p.vy;p.r+=p.vr;
-      x.save();x.translate(p.x,p.y);x.rotate(p.r);x.fillStyle=p.c;x.fillRect(-p.s/2,-p.s/4,p.s,p.s/2);x.restore();}
+    cx.clearRect(0,0,W,H);
+    P.forEach(function(p){p.x+=p.vx;p.y+=p.vy;p.r+=p.vr;cx.save();cx.translate(p.x,p.y);cx.rotate(p.r);
+      cx.fillStyle=p.c;cx.fillRect(-p.s/2,-p.s/4,p.s,p.s/2);cx.restore();});
     P=P.filter(function(p){return p.y<H+30});
-    requestAnimationFrame(tick);
+    if(P.length)requestAnimationFrame(tick);else{run=false;cx.clearRect(0,0,W,H);}
   }
-  burst(240); setInterval(function(){burst(110)},15000); tick();
+
+  function show(){
+    cos.forEach(function(c,i){c.classList.toggle('on',i===ci)});
+    var act=cos[ci];
+    [].forEach.call(act.querySelectorAll('.slide'),function(s){s.classList.toggle('on',s.getAttribute('data-k')===cur)});
+    var s=act.querySelector('.slide.on');
+    if(s){$('ttl').textContent=s.getAttribute('data-title');$('sub').textContent=s.getAttribute('data-sub');}
+    if(nameEl)nameEl.textContent=act.getAttribute('data-name');
+    if(cntEl)cntEl.textContent=(ci+1)+' / '+n;
+    if(list){list.hidden=true;[].forEach.call(list.children,function(li,i){li.classList.toggle('cur',i===ci)});}
+    tabs.forEach(function(b){b.classList.toggle('on',b.getAttribute('data-k')===cur)});
+    if(cur==='finale'&&CONF)burst();
+  }
+  function schedule(){
+    clearTimeout(timer);
+    if(MODE!=='both')return;
+    timer=setTimeout(function(){cur=(cur==='progress')?'finale':'progress';show();schedule();},cur==='progress'?16000:20000);
+  }
+  function go(d){ci=(ci+d+n)%n;cur=(MODE==='finale')?'finale':'progress';show();schedule();}
+  function pick(i){ci=i;cur=(MODE==='finale')?'finale':'progress';show();schedule();}
+
+  if($('prev'))$('prev').addEventListener('click',function(){go(-1)});
+  if($('next'))$('next').addEventListener('click',function(){go(1)});
+  if(btn)btn.addEventListener('click',function(e){e.stopPropagation();list.hidden=!list.hidden});
+  if(list)[].forEach.call(list.children,function(li,i){li.firstChild.addEventListener('click',function(){pick(i)})});
+  document.addEventListener('click',function(){if(list)list.hidden=true});
+  tabs.forEach(function(b){b.addEventListener('click',function(){cur=b.getAttribute('data-k');show();schedule();})});
+  document.addEventListener('keydown',function(e){
+    if(n<2)return;
+    if(e.key==='ArrowLeft')go(1);else if(e.key==='ArrowRight')go(-1);
+  });
+  show();schedule();
 })();
 </script>
 </body>
