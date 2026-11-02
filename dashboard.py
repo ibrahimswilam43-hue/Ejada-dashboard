@@ -25,20 +25,6 @@ MODES = {
 TOTAL_WORDS = {"الإجمالي", "الاجمالي", "اجمالي", "إجمالي", "المجموع", "مجموع",
                "total", "grand total", "sum"}
 
-FOOTER_ITEMS = [
-    ("pin", "Riyadh - Al Narjis District – Rabah AlLakhmi Street"),
-    ("globe", "www.ejaada.sa"),
-    ("mail", "info@ejaada.sa"),
-    ("phone", "9200 13057"),
-    (None, "CR 1010344350"),
-]
-ICONS = {
-    "pin": '<svg viewBox="0 0 24 24"><path d="M12 2C8.1 2 5 5.1 5 9c0 5.2 7 13 7 13s7-7.8 7-13c0-3.9-3.1-7-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>',
-    "globe": '<svg viewBox="0 0 24 24" style="fill:none;stroke:#fff;stroke-width:2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg>',
-    "mail": '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M3 7l9 6 9-6" style="fill:none;stroke:#13204F;stroke-width:2"/></svg>',
-    "phone": '<svg viewBox="0 0 24 24"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.6 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.46.6 3.6a1 1 0 0 1-.25 1z"/></svg>',
-}
-
 
 # ---------------------------------------------------------------- البيانات
 def _clean(df: pd.DataFrame) -> pd.DataFrame:
@@ -160,7 +146,16 @@ def _finale(df, target, cur, photo_src, title, sub):
             f'<div class="podium">{"".join(cols)}</div></div>')
 
 
-def _progress(df, target, cur, top_n, photo_src, sub):
+def _cheer_html(text):
+    esc = html.escape
+    for sep in ("…", "..."):
+        if sep in text:
+            a, b = text.split(sep, 1)
+            return f"{esc(a.strip())}{sep} <b>{esc(b.strip())}</b>"
+    return esc(text)
+
+
+def _progress(df, target, cur, top_n, photo_src, sub, cheer):
     esc = html.escape
     rows = df.head(top_n)
     pcts = [r.amount / target * 100 for r in rows.itertuples()]
@@ -178,11 +173,15 @@ def _progress(df, target, cur, top_n, photo_src, sub):
     legend = '<span class="legend"><u></u> الخط المتقطع = التارجت</span>' if over else ""
     return (f'<div class="slide" data-k="progress" data-title="أرقام تتحرك... ونتائج تقول مين الأقوى" data-sub="{esc(sub, True)}">'
             f'<div class="chart">{legend}<div class="bars"><div class="arrow"></div>{"".join(cols)}</div>'
-            f'<p class="cheer">خلّو حماسكم يتكلم، وورّونا إلى وين تقدرون توصلون في <b>تحقيق أعلى نسبة تحصيل!</b></p></div></div>')
+            f'<p class="cheer">{_cheer_html(cheer)}</p></div></div>')
 
 
 # ---------------------------------------------------------------- الصفحة
-def build_html(companies, period, mode, currency, top_n=15, confetti=False, date=None) -> str:
+DEFAULT_CHEER = "السباق بدأ… ومين بيوصل للقمة أول؟"
+
+
+def build_html(companies, period, mode, currency, top_n=15, confetti=False, date=None,
+               cheer=DEFAULT_CHEER, auto_secs=15, auto_start=False) -> str:
     """companies = [{name, df, target, photo(bytes|None)}] بالترتيب اللي هيتعرض."""
     esc = html.escape
     date = date or datetime.date.today()
@@ -201,7 +200,7 @@ def build_html(companies, period, mode, currency, top_n=15, confetti=False, date
         sub_f = f"{period_label} · أعلى {min(3, n)} في التحصيل · بتاريخ {ds}"
         slides = ""
         if mode in ("progress", "both"):
-            slides += _progress(df, target, currency, top_n, photo_src, sub_p)
+            slides += _progress(df, target, currency, top_n, photo_src, sub_p, cheer)
         if mode in ("finale", "both"):
             slides += _finale(df, target, currency, photo_src, headline, sub_f)
         sections.append(f'<section class="co" data-name="{esc(c["name"], True)}">{slides}</section>')
@@ -224,14 +223,16 @@ def build_html(companies, period, mode, currency, top_n=15, confetti=False, date
             f'<span class="nt" id="coName">{esc(names[0])}</span>{caret}</button>'
             f'<ul class="list" id="coList" hidden>{items}</ul></div>'
             f'<button class="nav" id="next" type="button" aria-label="الشركة التالية">{chev_l}</button>'
-            f'<span class="cnt" id="coCnt">1 / {len(names)}</span></div>')
+            f'<span class="cnt" id="coCnt">1 / {len(names)}</span>'
+            '<button class="nav clk off" id="clk" type="button" aria-pressed="false" title="تبديل تلقائي بين الشركات">'
+            '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><polyline points="12 7.5 12 12 15.5 14"/>'
+            '<line class="sl" x1="4" y1="20" x2="20" y2="4"/></svg></button></div>')
 
     tabs = ""
     if mode == "both":
         tabs = ('<div class="tabs"><button type="button" data-k="progress" class="on">التقدم</button>'
                 '<button type="button" data-k="finale">النهاية</button></div>')
 
-    foot = "".join(f'<span>{ICONS.get(ic, "")}{esc(tx)}</span>' for ic, tx in FOOTER_ITEMS)
     canvas = '<canvas id="cf"></canvas>' if confetti else ""
 
     page = TEMPLATE
@@ -243,10 +244,11 @@ def build_html(companies, period, mode, currency, top_n=15, confetti=False, date
         "__SUB__": esc(first_sub),
         "__TABS__": tabs,
         "__SECTIONS__": "".join(sections),
-        "__FOOT__": foot,
         "__CANVAS__": canvas,
         "__MODE__": mode,
         "__CONF__": "true" if confetti else "false",
+        "__SECS__": str(max(1, int(auto_secs))),
+        "__AUTO__": "true" if auto_start else "false",
     }.items():
         page = page.replace(k, v)
     return page
@@ -291,6 +293,9 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .nav{width:4vh;height:4vh;border-radius:50%;border:1.5px solid var(--line);display:grid;place-items:center;transition:background .2s,color .2s}
 .nav:hover,.nav:focus-visible{background:#fff;color:var(--navy);outline:none}
 .nav svg{width:52%;height:52%;fill:none;stroke:currentColor;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+.clk .sl{display:none}
+.clk.off .sl{display:block}
+.clk:not(.off){background:#fff;color:var(--navy)}
 .pick{position:relative}
 .name{display:inline-flex;align-items:center;gap:.7vw;font-weight:800;font-size:clamp(1rem,2.6vh,1.6rem);
   padding:.4vh 1.3vw;border-radius:999px;background:var(--soft);border:1.5px solid var(--line);transition:background .2s}
@@ -365,17 +370,14 @@ h1{font-size:clamp(1.6rem,5.6vh,3.6rem);font-weight:900;line-height:1.15;margin-
 .cheer{margin-top:1.6vh;padding-top:1.4vh;border-top:1px solid var(--line);text-align:center;font-weight:700;font-size:clamp(.95rem,2.6vh,1.6rem)}
 .cheer b{font-weight:900}
 
-/* ---- الفوتر ---- */
-.foot{height:8.5vh;display:flex;align-items:center;justify-content:center;gap:2.4vw;padding:0 11vw;position:relative;z-index:2;
-  font-size:clamp(.7rem,1.9vh,1.15rem);white-space:nowrap}
-.foot span{display:inline-flex;align-items:center;gap:.5vw;direction:ltr;unicode-bidi:isolate}
-.foot svg{width:2.2vh;height:2.2vh;fill:#fff;flex:none}
+/* ---- الفوتر (للفريم بس) ---- */
+.foot{height:5vh;flex:none}
 #cf{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:40}
 
 @media (max-width:900px){
   body{overflow:auto}.page{height:auto;min-height:100vh}
   .stage{padding:0 4vw}.podium{flex-direction:column;align-items:center}
-  .pod{max-width:90vw}.foot{flex-wrap:wrap;height:auto;padding:2vh 4vw}
+  .pod{max-width:90vw}
 }
 @media (prefers-reduced-motion:reduce){.pbar i,.track i{animation:none}}
 </style>
@@ -401,7 +403,7 @@ __CANVAS__
 
   <main class="stage">__SECTIONS__</main>
 
-  <footer class="foot">__FOOT__</footer>
+  <footer class="foot"></footer>
 </div>
 
 <script>
@@ -443,10 +445,19 @@ __CANVAS__
     tabs.forEach(function(b){b.classList.toggle('on',b.getAttribute('data-k')===cur)});
     if(cur==='finale'&&CONF)burst();
   }
+  var SECS=__SECS__*1000, auto=__AUTO__, clk=$('clk');
+  function setClk(){if(clk){clk.classList.toggle('off',!auto);clk.setAttribute('aria-pressed',auto?'true':'false');}}
   function schedule(){
     clearTimeout(timer);
-    if(MODE!=='both')return;
-    timer=setTimeout(function(){cur=(cur==='progress')?'finale':'progress';show();schedule();},cur==='progress'?16000:20000);
+    if(!(MODE==='both'||(auto&&n>1)))return;
+    timer=setTimeout(function(){
+      if(MODE==='both'){
+        if(cur==='progress'){cur='finale';}
+        else if(auto&&n>1){ci=(ci+1)%n;cur='progress';}
+        else{cur='progress';}
+      }else{ci=(ci+1)%n;}
+      show();schedule();
+    },SECS);
   }
   function go(d){ci=(ci+d+n)%n;cur=(MODE==='finale')?'finale':'progress';show();schedule();}
   function pick(i){ci=i;cur=(MODE==='finale')?'finale':'progress';show();schedule();}
@@ -461,7 +472,8 @@ __CANVAS__
     if(n<2)return;
     if(e.key==='ArrowLeft')go(1);else if(e.key==='ArrowRight')go(-1);
   });
-  show();schedule();
+  if(clk)clk.addEventListener('click',function(){auto=!auto;setClk();schedule();});
+  setClk();show();schedule();
 })();
 </script>
 </body>

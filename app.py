@@ -5,6 +5,15 @@ import streamlit.components.v1 as components
 
 from dashboard import MODES, PERIODS, build_html, ejada_white_uri, load_workbook
 
+CHEERS = [
+    "السباق بدأ… ومين بيوصل للقمة أول؟",
+    "كل يوم فرصة جديدة… ورونا مين يرفع النسبة ويتصدر!",
+    "خلوا الإنجاز عنوانكم… والنتائج تشهد لكم!",
+    "ارفعوا السقف… وخلوا التحصيل يوصل لأبعد حد!",
+    "كل تحصيل يقربكم من الصدارة… لا توقفون!",
+]
+OTHER = "أخرى (اكتب الجملة اللي عايزها)"
+
 st.set_page_config(page_title="نجم التحصيل | إجادة", page_icon="🏆", layout="wide")
 
 
@@ -77,6 +86,14 @@ with st.container(border=True, key="card_settings"):
     currency = c1.text_input("العملة", value="ر.س")
     top_n = c2.slider("عدد الموظفين في عرض التقدم", 5, 30, 15, disabled=(mode == "finale"))
     confetti = c3.checkbox("كونفيتي هادي عند عرض الفائزين", value=False, disabled=(mode == "progress"))
+    d1, d2 = st.columns(2)
+    auto_secs = d1.number_input("مدة كل شاشة بالثواني (للتبديل التلقائي بين الشركات)", min_value=3, max_value=600, value=15, step=1)
+    auto_start = d2.checkbox("ابدأ والتبديل التلقائي شغّال (الساعة جنب اسم الشركة تقفله وتشغّله)", value=False)
+    st.markdown("**الجملة التحفيزية في عرض التقدم**")
+    cheer_pick = st.radio("اختار جملة", CHEERS + [OTHER], label_visibility="collapsed", disabled=(mode == "finale"))
+    cheer = cheer_pick
+    if cheer_pick == OTHER:
+        cheer = st.text_input("اكتب الجملة", placeholder="مثال: كل خطوة تقربكم من القمة… كمّلوا!").strip() or CHEERS[0]
 
 # ------------------------------------------------------------ 2) الملف
 with st.container(border=True, key="card_file"):
@@ -130,6 +147,7 @@ if excel:
             ]
             st.session_state["html"] = build_html(
                 companies, period, mode, currency.strip(), top_n=top_n, confetti=confetti,
+                cheer=cheer, auto_secs=int(auto_secs), auto_start=auto_start,
             )
             st.session_state["fname"] = f"top_collector_{datetime.date.today():%Y%m%d}.html"
 
@@ -143,4 +161,4 @@ if "html" in st.session_state:
         mime="text/html",
         use_container_width=True,
     )
-    st.caption("افتح الملف المحمّل في المتصفح على شاشة الشركة واضغط F11. للتنقل بين الشركات: الأسهم أو اضغط على الاسم، أو أسهم الكيبورد.")
+    st.caption("افتح الملف المحمّل في المتصفح على شاشة الشركة واضغط F11. للتنقل بين الشركات: الأسهم أو اضغط على الاسم أو أسهم الكيبورد، والساعة بتشغّل وتوقف التبديل التلقائي.")
