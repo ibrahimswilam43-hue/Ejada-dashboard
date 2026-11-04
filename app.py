@@ -111,6 +111,7 @@ with st.container(border=True, key="card_settings"):
     confetti = c3.checkbox("كونفيتي هادي عند عرض الفائزين", value=False, disabled=(mode == "progress"))
     winners = st.radio("عدد الفائزين في لوحة النهاية", [1, 2, 3], index=2, horizontal=True,
                        format_func=lambda n: {1: "الأول فقط", 2: "أول 2", 3: "أول 3"}[n], disabled=(mode == "progress"))
+    show_name = st.radio("إظهار اسم الشركة في الداشبورد", ["نعم", "لا (الأسهم والساعة بس)"], horizontal=True) == "نعم"
     d1, d2 = st.columns(2)
     auto_secs = d1.number_input("مدة كل شاشة بالثواني (للتبديل التلقائي بين الشركات)", min_value=3, max_value=600, value=15, step=1)
     auto_start = d2.checkbox("ابدأ والتبديل التلقائي شغّال (الساعة جنب اسم الشركة تقفله وتشغّله)", value=False)
@@ -199,6 +200,7 @@ if excel:
             st.session_state["html"] = build_html(
                 companies, period, mode, currency.strip(), top_n=top_n, confetti=confetti,
                 cheer=cheer, auto_secs=int(auto_secs), auto_start=auto_start, winners=winners,
+                show_name=show_name,
             )
             st.session_state["fname"] = f"top_collector_{datetime.date.today():%Y%m%d}.html"
 

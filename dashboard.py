@@ -217,7 +217,7 @@ DEFAULT_CHEER = "السباق بدأ… ومين بيوصل للقمة أول؟"
 
 
 def build_html(companies, period, mode, currency, top_n=15, confetti=False, date=None,
-               cheer=DEFAULT_CHEER, auto_secs=15, auto_start=False, winners=3) -> str:
+               cheer=DEFAULT_CHEER, auto_secs=15, auto_start=False, winners=3, show_name=True) -> str:
     """companies = [{name, df, target, photo(bytes|None)}] بالترتيب اللي هيتعرض."""
     esc = html.escape
     date = date or datetime.date.today()
@@ -250,7 +250,17 @@ def build_html(companies, period, mode, currency, top_n=15, confetti=False, date
     chev_r = '<svg viewBox="0 0 24 24"><polyline points="9 5 16 12 9 19"/></svg>'
     chev_l = '<svg viewBox="0 0 24 24"><polyline points="15 5 8 12 15 19"/></svg>'
     caret = '<svg class="caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>'
-    if len(names) == 1:
+    clock = ('<button class="nav clk off" id="clk" type="button" aria-pressed="false" title="تبديل تلقائي بين الشركات">'
+             '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><polyline points="12 7.5 12 12 15.5 14"/>'
+             '<line class="sl" x1="4" y1="20" x2="20" y2="4"/></svg></button>')
+    if not show_name:
+        # من غير اسم: أسهم الشركات والساعة بس
+        switch = ("" if len(names) == 1 else
+                  '<div class="switch">'
+                  f'<button class="nav" id="prev" type="button" aria-label="السابق">{chev_r}</button>'
+                  f'<button class="nav" id="next" type="button" aria-label="التالي">{chev_l}</button>'
+                  f'{clock}</div>')
+    elif len(names) == 1:
         switch = f'<div class="switch"><span class="name static"><span class="nt" id="coName">{esc(names[0])}</span></span></div>'
     else:
         items = "".join(f'<li data-i="{i}"><button type="button">{esc(n)}</button></li>' for i, n in enumerate(names))
