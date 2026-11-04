@@ -4,24 +4,12 @@ import datetime
 import html
 import io
 import math
-import os
 
 import pandas as pd
 from PIL import Image, ImageOps
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-EJADA_LOGO = os.path.join(BASE, "assets", "ejada_logo.png")
+from branding import EJADA_LOGO, MODES, PERIODS, ejada_white_uri  # noqa: F401  (بيتستخدموا هنا وفي app.py)
 
-PERIODS = {
-    "يومي": ("نجم تحصيل اليوم", "التحصيل اليومي"),
-    "أسبوعي": ("نجم تحصيل الأسبوع", "التحصيل الأسبوعي"),
-    "شهري": ("نجم تحصيل الشهر", "التحصيل الشهري"),
-}
-MODES = {
-    "عرض التقدم": "progress",
-    "عرض النهاية (الأفضل)": "finale",
-    "الاتنين بالتبديل التلقائي": "both",
-}
 TOTAL_WORDS = {"الإجمالي", "الاجمالي", "اجمالي", "إجمالي", "المجموع", "مجموع",
                "total", "grand total", "sum"}
 
@@ -48,14 +36,27 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_workbook(file):
     """كل شيت = شركة. يرجع ({اسم الشيت: جدول مرتب}, {اسم الشيت: سبب التجاهل})."""
-    xl = pd.ExcelFile(file)
+    xl = pd.ExcelFile(_buf(file), engine=_engine())
     ok, bad = {}, {}
     for sh in xl.sheet_names:
         try:
-            ok[sh] = _clean(xl.parse(sh))
+            try:
+                raw = xl.parse(sh, usecols=[0, 1])  # أول عمودين بس (أسرع بكتير)
+            except Exception:  # noqa: BLE001
+                raw = xl.parse(sh)
+            ok[sh] = _clean(raw)
         except Exception as e:  # noqa: BLE001
             bad[sh] = str(e)
     return ok, bad
+
+
+def _engine():
+    """python-calamine أسرع بكتير في الشيتات الكبيرة؛ لو مش متسطّب بنرجع للافتراضي."""
+    try:
+        import python_calamine  # noqa: F401
+        return "calamine"
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _buf(file):
@@ -72,12 +73,15 @@ def norm_name(s) -> str:
 
 
 def target_sheets(file):
-    return pd.ExcelFile(_buf(file)).sheet_names
+    return pd.ExcelFile(_buf(file), engine=_engine()).sheet_names
 
 
 def load_targets(file, sheet=0):
     """شيت من عمودين: الشركة | التارجت. يرجع {اسم مُطبَّع: (الاسم الأصلي, التارجت)}."""
-    df = pd.read_excel(_buf(file), sheet_name=sheet)
+    try:
+        df = pd.read_excel(_buf(file), sheet_name=sheet, engine=_engine(), usecols=[0, 1])
+    except Exception:  # noqa: BLE001
+        df = pd.read_excel(_buf(file), sheet_name=sheet, engine=_engine())
     if df.shape[1] < 2:
         raise ValueError("شيت التارجت لازم يكون فيه عمودين: الشركة والتارجت.")
     df = df.iloc[:, :2].copy()
@@ -97,23 +101,6 @@ def load_targets(file, sheet=0):
 # ---------------------------------------------------------------- الصور
 def _data_uri(raw: bytes, mime: str) -> str:
     return f"data:{mime};base64," + base64.b64encode(raw).decode()
-
-
-def ejada_white_uri() -> str:
-    """لوجو إجادة أبيض (للخلفية الكحلي) مقصوص من الفراغات."""
-    src = Image.open(EJADA_LOGO).convert("RGBA")
-    alpha = src.split()[3]
-    if alpha.getextrema()[0] == 255:  # لو الملف بخلفية بيضاء مش شفافة
-        alpha = ImageOps.invert(src.convert("L")).point(lambda p: 0 if p < 30 else min(255, p * 2))
-    white = Image.new("RGBA", src.size, (255, 255, 255, 255))
-    white.putalpha(alpha)
-    bbox = alpha.point(lambda p: 255 if p > 20 else 0).getbbox()
-    if bbox:
-        white = white.crop(bbox)
-    white.thumbnail((700, 700))
-    buf = io.BytesIO()
-    white.save(buf, "PNG")
-    return _data_uri(buf.getvalue(), "image/png")
 
 
 def photo_uri(raw: bytes) -> str:

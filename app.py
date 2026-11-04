@@ -1,11 +1,11 @@
 import datetime
 import io
+import threading
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from dashboard import (MODES, PERIODS, build_html, ejada_white_uri, load_targets, load_workbook,
-                       norm_name, target_sheets)
+from branding import MODES, PERIODS, ejada_white_uri
 
 CHEERS = [
     "السباق بدأ… ومين بيوصل للقمة أول؟",
@@ -17,27 +17,39 @@ CHEERS = [
 OTHER = "أخرى (اكتب الجملة اللي عايزها)"
 
 
-# كاش للعمليات التقيلة عشان كل rerun يبقى خفيف (ومايحصلش تعليق في الرفع)
+# pandas تقيلة في الاستيراد: بنحمّلها بعد ما الصفحة تظهر (وفي خلفية الصفحة عشان تبقى جاهزة)
+def _dash():
+    import dashboard
+    return dashboard
+
+
+@st.cache_resource(show_spinner=False)
+def _warm() -> bool:
+    threading.Thread(target=_dash, daemon=True).start()
+    return True
+
+
+_warm()
+
+
 @st.cache_data(show_spinner=False)
 def _logo() -> str:
     return ejada_white_uri()
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner="بقرأ ملف التحصيل…")
 def _workbook(raw: bytes):
-    return load_workbook(io.BytesIO(raw))
+    return _dash().load_workbook(io.BytesIO(raw))
 
 
 @st.cache_data(show_spinner=False)
 def _target_sheets(raw: bytes):
-    return target_sheets(io.BytesIO(raw))
+    return _dash().target_sheets(io.BytesIO(raw))
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner="بقرأ ملف التارجت…")
 def _targets(raw: bytes, sheet):
-    return load_targets(io.BytesIO(raw), sheet)
-
-st.set_page_config(page_title="نجم التحصيل | إجادة", page_icon="🏆", layout="wide")
+    return _dash().load_targets(io.BytesIO(raw), sheet)
 
 
 def show_html(page: str, height: int = 820):
@@ -53,8 +65,7 @@ NAVY, DEEP = "#13204F", "#0A1330"
 st.markdown(
     f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;800;900&display=swap');
-    .stApp, .stMarkdown, .stMarkdown p, label, h1, h2, h3, button, input, textarea {{font-family:'Cairo','Segoe UI',Tahoma,sans-serif;}}
+    .stApp, .stMarkdown, .stMarkdown p, label, h1, h2, h3, button, input, textarea {{font-family:'Segoe UI',Tahoma,'Source Sans Pro',sans-serif;}}
     .stApp {{background:linear-gradient(180deg,#E4E9F6 0%,#F5F7FC 60%);}}
     header[data-testid="stHeader"] {{background:transparent;}}
     .block-container {{direction:rtl;text-align:right;max-width:1180px;padding-top:1.4rem;padding-bottom:3rem;}}
@@ -162,7 +173,7 @@ if excel:
     st.markdown('<div class="step" style="margin-top:.6rem"><i>3</i> الشركات والتارجت</div>', unsafe_allow_html=True)
     st.caption(f"لقيت {len(sheets)} شركة. اكتب التارجت لكل شركة، أو ارفع ملف التارجت فوق (والصورة اختيارية للموظف الأعلى).")
     if targets:
-        missing_in_file = [n for n in sheets if norm_name(n) not in targets]
+        missing_in_file = [n for n in sheets if _dash().norm_name(n) not in targets]
         if missing_in_file:
             st.warning("شركات مش موجودة في ملف التارجت، ادخل تارجتها يدوي: " + "، ".join(missing_in_file))
         else:
@@ -170,7 +181,7 @@ if excel:
 
     inputs = {}
     for i, (name, df) in enumerate(sheets.items()):
-        found = targets.get(norm_name(name))
+        found = targets.get(_dash().norm_name(name))
         top = df.iloc[0]
         with st.container(border=True, key=f"card_co_{i}"):
             st.markdown(
@@ -197,7 +208,7 @@ if excel:
                 {"name": n, "df": df, "target": float(t), "photo": ph.getvalue() if ph else None}
                 for n, (df, t, ph) in inputs.items()
             ]
-            st.session_state["html"] = build_html(
+            st.session_state["html"] = _dash().build_html(
                 companies, period, mode, currency.strip(), top_n=top_n, confetti=confetti,
                 cheer=cheer, auto_secs=int(auto_secs), auto_start=auto_start, winners=winners,
                 show_name=show_name,
