@@ -58,6 +58,42 @@ def load_workbook(file):
     return ok, bad
 
 
+def _buf(file):
+    """UploadedFile -> BytesIO جديد (عشان القراءة المتكررة مع كل rerun)."""
+    return io.BytesIO(file.getvalue()) if hasattr(file, "getvalue") else file
+
+
+def norm_name(s) -> str:
+    """مطابقة اسم الشركة بالاسم: تجاهل المسافات الزايدة والحروف الكبيرة وشكل الهمزة والياء."""
+    s = " ".join(str(s).split()).lower()
+    for a, b in (("أ", "ا"), ("إ", "ا"), ("آ", "ا"), ("ى", "ي")):
+        s = s.replace(a, b)
+    return s
+
+
+def target_sheets(file):
+    return pd.ExcelFile(_buf(file)).sheet_names
+
+
+def load_targets(file, sheet=0):
+    """شيت من عمودين: الشركة | التارجت. يرجع {اسم مُطبَّع: (الاسم الأصلي, التارجت)}."""
+    df = pd.read_excel(_buf(file), sheet_name=sheet)
+    if df.shape[1] < 2:
+        raise ValueError("شيت التارجت لازم يكون فيه عمودين: الشركة والتارجت.")
+    df = df.iloc[:, :2].copy()
+    df.columns = ["co", "target"]
+    df["co"] = df["co"].astype(str).str.strip()
+    df["target"] = pd.to_numeric(
+        df["target"].astype(str).str.replace(",", "", regex=False).str.replace("٬", "", regex=False).str.strip(),
+        errors="coerce",
+    )
+    df = df.dropna(subset=["target"])
+    df = df[(df["target"] > 0) & ~df["co"].str.lower().isin({"", "nan", "none"})]
+    if df.empty:
+        raise ValueError("مفيش تارجت صالح في الشيت (تأكد إن العمود التاني أرقام أكبر من صفر).")
+    return {norm_name(r.co): (r.co, float(r.target)) for r in df.itertuples()}
+
+
 # ---------------------------------------------------------------- الصور
 def _data_uri(raw: bytes, mime: str) -> str:
     return f"data:{mime};base64," + base64.b64encode(raw).decode()
@@ -114,9 +150,9 @@ def _avatar(photo_src=None) -> str:
 
 
 # ---------------------------------------------------------------- الشرائح
-def _finale(df, target, cur, photo_src, title, sub):
+def _finale(df, target, cur, photo_src, title, sub, winners=3):
     esc = html.escape
-    m = min(3, len(df))
+    m = min(max(1, winners), len(df))
     cols = []
     order = (1, 0, 2) if m == 3 else tuple(range(m))  # RTL: الثاني يمين، الأول وسط، الثالث شمال
     for k in order:
@@ -181,7 +217,7 @@ DEFAULT_CHEER = "السباق بدأ… ومين بيوصل للقمة أول؟"
 
 
 def build_html(companies, period, mode, currency, top_n=15, confetti=False, date=None,
-               cheer=DEFAULT_CHEER, auto_secs=15, auto_start=False) -> str:
+               cheer=DEFAULT_CHEER, auto_secs=15, auto_start=False, winners=3) -> str:
     """companies = [{name, df, target, photo(bytes|None)}] بالترتيب اللي هيتعرض."""
     esc = html.escape
     date = date or datetime.date.today()
@@ -197,12 +233,14 @@ def build_html(companies, period, mode, currency, top_n=15, confetti=False, date
         shown = min(top_n, n)
         count_txt = f"أعلى {shown} من {n} موظف" if n > shown else f"{n} موظف"
         sub_p = f"{period_label} · {count_txt} · إجمالي التحصيل {_fmt(df.amount.sum())} {currency}"
-        sub_f = f"{period_label} · أعلى {min(3, n)} في التحصيل · بتاريخ {ds}"
+        m_w = min(max(1, winners), n)
+        top_txt = "الأعلى تحصيلًا" if m_w == 1 else f"أعلى {m_w} في التحصيل"
+        sub_f = f"{period_label} · {top_txt} · بتاريخ {ds}"
         slides = ""
         if mode in ("progress", "both"):
             slides += _progress(df, target, currency, top_n, photo_src, sub_p, cheer)
         if mode in ("finale", "both"):
-            slides += _finale(df, target, currency, photo_src, headline, sub_f)
+            slides += _finale(df, target, currency, photo_src, headline, sub_f, winners)
         sections.append(f'<section class="co" data-name="{esc(c["name"], True)}">{slides}</section>')
         if i == 0:
             first_title = "أرقام تتحرك... ونتائج تقول مين الأقوى" if start == "progress" else headline

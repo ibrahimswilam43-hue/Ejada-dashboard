@@ -3,7 +3,8 @@ import datetime
 import streamlit as st
 import streamlit.components.v1 as components
 
-from dashboard import MODES, PERIODS, build_html, ejada_white_uri, load_workbook
+from dashboard import (MODES, PERIODS, build_html, ejada_white_uri, load_targets, load_workbook,
+                       norm_name, target_sheets)
 
 CHEERS = [
     "السباق بدأ… ومين بيوصل للقمة أول؟",
@@ -86,6 +87,8 @@ with st.container(border=True, key="card_settings"):
     currency = c1.text_input("العملة", value="ر.س")
     top_n = c2.slider("عدد الموظفين في عرض التقدم", 5, 30, 15, disabled=(mode == "finale"))
     confetti = c3.checkbox("كونفيتي هادي عند عرض الفائزين", value=False, disabled=(mode == "progress"))
+    winners = st.radio("عدد الفائزين في لوحة النهاية", [1, 2, 3], index=2, horizontal=True,
+                       format_func=lambda n: {1: "الأول فقط", 2: "أول 2", 3: "أول 3"}[n], disabled=(mode == "progress"))
     d1, d2 = st.columns(2)
     auto_secs = d1.number_input("مدة كل شاشة بالثواني (للتبديل التلقائي بين الشركات)", min_value=3, max_value=600, value=15, step=1)
     auto_start = d2.checkbox("ابدأ والتبديل التلقائي شغّال (الساعة جنب اسم الشركة تقفله وتشغّله)", value=False)
@@ -119,8 +122,27 @@ if excel:
     st.markdown('<div class="step" style="margin-top:.6rem"><i>3</i> الشركات والتارجت</div>', unsafe_allow_html=True)
     st.caption(f"لقيت {len(sheets)} شركة. اكتب التارجت لكل شركة (والصورة اختيارية للموظف الأعلى).")
 
+    src = st.radio("مصدر التارجت", ["إدخال يدوي", "رفع من ملف إكسيل"], horizontal=True)
+    targets, sig = {}, "manual"
+    if src == "رفع من ملف إكسيل":
+        tfile = st.file_uploader("ملف التارجت: شيت فيه عمودين (الشركة + التارجت)، والمطابقة بالاسم", type=["xlsx", "xls"], key="tfile")
+        if tfile:
+            try:
+                tnames = target_sheets(tfile)
+                tsheet = tnames[0] if len(tnames) == 1 else st.selectbox("الشيت اللي فيه التارجت", tnames)
+                targets = load_targets(tfile, tsheet)
+                sig = f"{tfile.name}-{tfile.size}-{tsheet}"
+                missing_in_file = [n for n in sheets if norm_name(n) not in targets]
+                if missing_in_file:
+                    st.warning("شركات مش موجودة في ملف التارجت، ادخل تارجتها يدوي: " + "، ".join(missing_in_file))
+                else:
+                    st.success("اتسحب تارجت كل الشركات من الملف (وتقدر تعدّل أي رقم).")
+            except Exception as e:  # noqa: BLE001
+                st.error(f"مشكلة في ملف التارجت: {e}")
+
     inputs = {}
     for i, (name, df) in enumerate(sheets.items()):
+        found = targets.get(norm_name(name))
         top = df.iloc[0]
         with st.container(border=True, key=f"card_co_{i}"):
             st.markdown(
@@ -130,9 +152,11 @@ if excel:
             )
             t_col, p_col = st.columns(2)
             target = t_col.number_input(
-                "التارجت لكل موظف", min_value=1.0, value=None, step=1000.0, format="%.0f",
-                placeholder="اكتب التارجت", key=f"target_{i}",
+                "التارجت لكل موظف", min_value=1.0, value=found[1] if found else None, step=1000.0, format="%.0f",
+                placeholder="اكتب التارجت", key=f"target_{i}_{sig}",
             )
+            if src == "رفع من ملف إكسيل" and targets:
+                t_col.caption("✅ من ملف التارجت" if found else "⚠️ مش موجودة في ملف التارجت، اكتبه يدوي")
             photo = p_col.file_uploader("صورة الموظف الأعلى (اختياري)", type=["png", "jpg", "jpeg", "webp"], key=f"photo_{i}")
             inputs[name] = (df, target, photo)
 
@@ -147,7 +171,7 @@ if excel:
             ]
             st.session_state["html"] = build_html(
                 companies, period, mode, currency.strip(), top_n=top_n, confetti=confetti,
-                cheer=cheer, auto_secs=int(auto_secs), auto_start=auto_start,
+                cheer=cheer, auto_secs=int(auto_secs), auto_start=auto_start, winners=winners,
             )
             st.session_state["fname"] = f"top_collector_{datetime.date.today():%Y%m%d}.html"
 
