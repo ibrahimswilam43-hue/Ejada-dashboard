@@ -1,4 +1,5 @@
 import datetime
+import io
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -14,6 +15,27 @@ CHEERS = [
     "كل تحصيل يقربكم من الصدارة… لا توقفون!",
 ]
 OTHER = "أخرى (اكتب الجملة اللي عايزها)"
+
+
+# كاش للعمليات التقيلة عشان كل rerun يبقى خفيف (ومايحصلش تعليق في الرفع)
+@st.cache_data(show_spinner=False)
+def _logo() -> str:
+    return ejada_white_uri()
+
+
+@st.cache_data(show_spinner=False)
+def _workbook(raw: bytes):
+    return load_workbook(io.BytesIO(raw))
+
+
+@st.cache_data(show_spinner=False)
+def _target_sheets(raw: bytes):
+    return target_sheets(io.BytesIO(raw))
+
+
+@st.cache_data(show_spinner=False)
+def _targets(raw: bytes, sheet):
+    return load_targets(io.BytesIO(raw), sheet)
 
 st.set_page_config(page_title="نجم التحصيل | إجادة", page_icon="🏆", layout="wide")
 
@@ -65,7 +87,7 @@ st.markdown(
     .co-top span {{color:#4A5A8A;font-weight:600;}}
     </style>
     <div class="hero">
-      <img src="{ejada_white_uri()}" alt="إجادة لتحصيل الديون">
+      <img src="{_logo()}" alt="إجادة لتحصيل الديون">
       <div>
         <h1>داشبورد أفضل موظف تحصيل</h1>
         <p>ارفع ملف الإكسيل (شيت لكل شركة)، حدّد التارجت، واختار طريقة العرض على شاشة الشركة.</p>
@@ -98,18 +120,35 @@ with st.container(border=True, key="card_settings"):
     if cheer_pick == OTHER:
         cheer = st.text_input("اكتب الجملة", placeholder="مثال: كل خطوة تقربكم من القمة… كمّلوا!").strip() or CHEERS[0]
 
-# ------------------------------------------------------------ 2) الملف
+# ------------------------------------------------------------ 2) الملفات
 with st.container(border=True, key="card_file"):
-    st.markdown('<div class="step"><i>2</i> ملف الإكسيل</div>', unsafe_allow_html=True)
-    excel = st.file_uploader(
-        "كل شيت = شركة (اسم الشيت هو اسم الشركة)، وفي كل شيت عمودين: الموظف + التحصيل",
-        type=["xlsx", "xls"],
+    st.markdown('<div class="step"><i>2</i> الملفات</div>', unsafe_allow_html=True)
+    u1, u2 = st.columns(2)
+    excel = u1.file_uploader(
+        "ملف التحصيل: كل شيت = شركة (اسم الشيت هو اسم الشركة)، وفي كل شيت عمودين: الموظف + التحصيل",
+        type=["xlsx", "xls"], key="main_file",
     )
+    tfile = u2.file_uploader(
+        "ملف التارجت (اختياري): شيت فيه عمودين (الشركة + التارجت)، والمطابقة بالاسم",
+        type=["xlsx", "xls"], key="target_file",
+    )
+    targets, sig, t_err = {}, "manual", None
+    if tfile is not None:
+        try:
+            traw = tfile.getvalue()
+            tnames = _target_sheets(traw)
+            tsheet = tnames[0] if len(tnames) == 1 else st.selectbox("الشيت اللي فيه التارجت", tnames)
+            targets = _targets(traw, tsheet)
+            sig = f"{tfile.name}-{len(traw)}-{tsheet}"
+        except Exception as e:  # noqa: BLE001
+            t_err = f"مشكلة في ملف التارجت: {e}"
+    if t_err:
+        st.error(t_err)
 
 # ------------------------------------------------------------ 3) الشركات
 if excel:
     try:
-        sheets, bad = load_workbook(excel)
+        sheets, bad = _workbook(excel.getvalue())
     except Exception as e:  # noqa: BLE001
         st.error(f"مشكلة في قراءة الملف: {e}")
         st.stop()
@@ -120,25 +159,13 @@ if excel:
         st.stop()
 
     st.markdown('<div class="step" style="margin-top:.6rem"><i>3</i> الشركات والتارجت</div>', unsafe_allow_html=True)
-    st.caption(f"لقيت {len(sheets)} شركة. اكتب التارجت لكل شركة (والصورة اختيارية للموظف الأعلى).")
-
-    src = st.radio("مصدر التارجت", ["إدخال يدوي", "رفع من ملف إكسيل"], horizontal=True)
-    targets, sig = {}, "manual"
-    if src == "رفع من ملف إكسيل":
-        tfile = st.file_uploader("ملف التارجت: شيت فيه عمودين (الشركة + التارجت)، والمطابقة بالاسم", type=["xlsx", "xls"], key="tfile")
-        if tfile:
-            try:
-                tnames = target_sheets(tfile)
-                tsheet = tnames[0] if len(tnames) == 1 else st.selectbox("الشيت اللي فيه التارجت", tnames)
-                targets = load_targets(tfile, tsheet)
-                sig = f"{tfile.name}-{tfile.size}-{tsheet}"
-                missing_in_file = [n for n in sheets if norm_name(n) not in targets]
-                if missing_in_file:
-                    st.warning("شركات مش موجودة في ملف التارجت، ادخل تارجتها يدوي: " + "، ".join(missing_in_file))
-                else:
-                    st.success("اتسحب تارجت كل الشركات من الملف (وتقدر تعدّل أي رقم).")
-            except Exception as e:  # noqa: BLE001
-                st.error(f"مشكلة في ملف التارجت: {e}")
+    st.caption(f"لقيت {len(sheets)} شركة. اكتب التارجت لكل شركة، أو ارفع ملف التارجت فوق (والصورة اختيارية للموظف الأعلى).")
+    if targets:
+        missing_in_file = [n for n in sheets if norm_name(n) not in targets]
+        if missing_in_file:
+            st.warning("شركات مش موجودة في ملف التارجت، ادخل تارجتها يدوي: " + "، ".join(missing_in_file))
+        else:
+            st.success("اتسحب تارجت كل الشركات من الملف (وتقدر تعدّل أي رقم).")
 
     inputs = {}
     for i, (name, df) in enumerate(sheets.items()):
@@ -155,7 +182,7 @@ if excel:
                 "التارجت لكل موظف", min_value=1.0, value=found[1] if found else None, step=1000.0, format="%.0f",
                 placeholder="اكتب التارجت", key=f"target_{i}_{sig}",
             )
-            if src == "رفع من ملف إكسيل" and targets:
+            if targets:
                 t_col.caption("✅ من ملف التارجت" if found else "⚠️ مش موجودة في ملف التارجت، اكتبه يدوي")
             photo = p_col.file_uploader("صورة الموظف الأعلى (اختياري)", type=["png", "jpg", "jpeg", "webp"], key=f"photo_{i}")
             inputs[name] = (df, target, photo)
