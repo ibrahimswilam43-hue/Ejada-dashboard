@@ -137,7 +137,8 @@ with st.container(border=True, key="card_file"):
     st.markdown('<div class="step"><i>2</i> الملفات</div>', unsafe_allow_html=True)
     u1, u2 = st.columns(2)
     excel = u1.file_uploader(
-        "ملف التحصيل: كل شيت = شركة (اسم الشيت هو اسم الشركة)، وفي كل شيت عمودين: الموظف + التحصيل",
+        "ملف التحصيل: كل شيت = شركة (اسم الشيت هو اسم الشركة)، وفي كل شيت عمودين: الموظف + التحصيل. "
+        "لو الشركة فيها فروع ضيف عمود عنوانه «الفرع»، ولو مفيهاش سيبه خالص",
         type=["xlsx", "xls"], key="main_file",
     )
     tfile = u2.file_uploader(
@@ -183,10 +184,12 @@ if excel:
     for i, (name, df) in enumerate(sheets.items()):
         found = targets.get(_dash().norm_name(name))
         top = df.iloc[0]
+        brs = _dash().branch_list(df)
+        br_txt = f" · {len(brs)} فرع" if brs else ""
         with st.container(border=True, key=f"card_co_{i}"):
             st.markdown(
                 f'<div class="co-top"><b>{name}</b><span>الأعلى: {top.emp} · {top.amount:,.0f} {currency}'
-                f' · {len(df)} موظف</span></div>',
+                f' · {len(df)} موظف{br_txt}</span></div>',
                 unsafe_allow_html=True,
             )
             t_col, p_col = st.columns(2)
@@ -196,18 +199,29 @@ if excel:
             )
             if targets:
                 t_col.caption("✅ من ملف التارجت" if found else "⚠️ مش موجودة في ملف التارجت، اكتبه يدوي")
-            photo = p_col.file_uploader("صورة الموظف الأعلى (اختياري)", type=["png", "jpg", "jpeg", "webp"], key=f"photo_{i}")
-            inputs[name] = (df, target, photo)
+            photos = {}
+            if brs:
+                # شركة فيها فروع: لكل فرع شاشته وأعلى موظف فيه، فصورة لكل فرع
+                p_col.caption("صورة الموظف الأعلى في كل فرع (اختياري)")
+                for j, b in enumerate(brs):
+                    sub = df[df["branch"].astype(str) == b]
+                    up = p_col.file_uploader(
+                        f"{b} · الأعلى: {sub.iloc[0].emp}", type=["png", "jpg", "jpeg", "webp"], key=f"photo_{i}_{j}",
+                    )
+                    photos[b] = up.getvalue() if up else None
+            else:
+                up = p_col.file_uploader("صورة الموظف الأعلى (اختياري)", type=["png", "jpg", "jpeg", "webp"], key=f"photo_{i}")
+                photos[None] = up.getvalue() if up else None
+            inputs[name] = (df, target, photos)
 
     if st.button("✨ إنشاء الداشبورد", type="primary", use_container_width=True):
         missing = [n for n, (_, t, _) in inputs.items() if not t]
         if missing:
             st.warning("لازم تكتب التارجت للشركات دي: " + "، ".join(missing))
         else:
-            companies = [
-                {"name": n, "df": df, "target": float(t), "photo": ph.getvalue() if ph else None}
-                for n, (df, t, ph) in inputs.items()
-            ]
+            companies = []  # عنصر لكل شركة، أو لكل فرع لو الشركة فيها فروع (بنفس الترتيب: الشركة وبعدها فروعها)
+            for n, (df, t, photos) in inputs.items():
+                companies += _dash().split_branches(n, df, float(t), photos)
             st.session_state["html"] = _dash().build_html(
                 companies, period, mode, currency.strip(), top_n=top_n, confetti=confetti,
                 cheer=cheer, auto_secs=int(auto_secs), auto_start=auto_start, winners=winners,
@@ -225,4 +239,4 @@ if "html" in st.session_state:
         mime="text/html",
         use_container_width=True,
     )
-    st.caption("افتح الملف المحمّل في المتصفح على شاشة الشركة واضغط F11. للتنقل بين الشركات: الأسهم أو اضغط على الاسم أو أسهم الكيبورد، والساعة بتشغّل وتوقف التبديل التلقائي.")
+    st.caption("افتح الملف المحمّل في المتصفح على شاشة الشركة واضغط F11. للتنقل بين الشركات والفروع: الأسهم أو اضغط على اسم الشركة / مربع الفرع أو أسهم الكيبورد، والساعة بتشغّل وتوقف التبديل التلقائي (بيعدّي على فروع الشركة واحد ورا التاني).")

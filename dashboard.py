@@ -14,13 +14,32 @@ TOTAL_WORDS = {"الإجمالي", "الاجمالي", "اجمالي", "إجما
                "total", "grand total", "sum"}
 
 
+BRANCH_WORDS = ("فرع", "فروع", "branch")
+NO_BRANCH = "بدون فرع"
+
+
 # ---------------------------------------------------------------- البيانات
+def _branch_idx(cols):
+    """رقم عمود الفرع (لو العنوان فيه «فرع» أو branch)، أو None لو الشيت من غير فروع."""
+    for i, c in enumerate(cols):
+        s = " ".join(str(c).split()).lower()
+        if any(w in s for w in BRANCH_WORDS):
+            return i
+    return None
+
+
 def _clean(df: pd.DataFrame) -> pd.DataFrame:
-    if df.shape[1] < 2:
+    bi = _branch_idx(df.columns)
+    keep = [i for i in range(df.shape[1]) if i != bi][:2]  # الموظف + التحصيل = أول عمودين غير الفرع
+    if len(keep) < 2:
         raise ValueError("لازم عمودين: الموظف والتحصيل.")
-    df = df.iloc[:, :2].copy()
-    df.columns = ["emp", "amount"]
+    has_br = bi is not None
+    df = df.iloc[:, keep + ([bi] if has_br else [])].copy()
+    df.columns = ["emp", "amount"] + (["branch"] if has_br else [])
     df["emp"] = df["emp"].astype(str).str.strip()
+    if has_br:
+        b = df["branch"].fillna("").astype(str).str.strip()
+        df["branch"] = b.where(~b.str.lower().isin({"", "nan", "none"}), NO_BRANCH)
     df["amount"] = pd.to_numeric(
         df["amount"].astype(str).str.replace(",", "", regex=False)
         .str.replace("٬", "", regex=False).str.strip(),
@@ -30,18 +49,47 @@ def _clean(df: pd.DataFrame) -> pd.DataFrame:
     df = df[~df["emp"].str.lower().isin(TOTAL_WORDS | {"", "nan", "none"})]
     if df.empty:
         raise ValueError("مفيش بيانات صالحة (تأكد إن العمود التاني أرقام).")
-    df = df.groupby("emp", as_index=False, sort=False)["amount"].sum()
+    if has_br and (df["branch"] == NO_BRANCH).all():
+        df, has_br = df.drop(columns="branch"), False  # عمود الفرع فاضي: نتعامل معاه كأنه مش موجود
+    keys = ["branch", "emp"] if has_br else ["emp"]
+    df = df.groupby(keys, as_index=False, sort=False)["amount"].sum()
+    if has_br:  # ترتيب الفروع = ترتيب ظهورها في الشيت
+        df["branch"] = pd.Categorical(df["branch"], categories=list(dict.fromkeys(df["branch"])))
     return df.sort_values("amount", ascending=False).reset_index(drop=True)
 
 
+def branch_list(df) -> list:
+    """فروع الشركة بترتيب ظهورها في الشيت، أو [] لو الشركة من غير فروع."""
+    if "branch" not in df.columns:
+        return []
+    cats = df["branch"].cat.categories if hasattr(df["branch"], "cat") else dict.fromkeys(df["branch"])
+    return [str(b) for b in cats]
+
+
+def split_branches(name, df, target, photos=None) -> list:
+    """شركة -> عناصر العرض: عنصر لكل فرع (أو عنصر واحد لو من غير فروع). photos = {اسم الفرع أو None: bytes}."""
+    photos = photos or {}
+    brs = branch_list(df)
+    if not brs:
+        return [{"name": name, "branch": None, "df": df, "target": target, "photo": photos.get(None)}]
+    return [
+        {"name": name, "branch": b, "target": target, "photo": photos.get(b),
+         "df": df[df["branch"].astype(str) == b].reset_index(drop=True)}
+        for b in brs
+    ]
+
+
 def load_workbook(file):
-    """كل شيت = شركة. يرجع ({اسم الشيت: جدول مرتب}, {اسم الشيت: سبب التجاهل})."""
+    """كل شيت = شركة (وعمود «الفرع» اختياري). يرجع ({اسم الشيت: جدول مرتب}, {اسم الشيت: سبب التجاهل})."""
     xl = pd.ExcelFile(_buf(file), engine=_engine())
     ok, bad = {}, {}
     for sh in xl.sheet_names:
         try:
             try:
-                raw = xl.parse(sh, usecols=[0, 1])  # أول عمودين بس (أسرع بكتير)
+                head = xl.parse(sh, nrows=1)
+                bi = _branch_idx(head.columns)
+                cols = [i for i in range(head.shape[1]) if i != bi][:2] + ([bi] if bi is not None else [])
+                raw = xl.parse(sh, usecols=sorted(cols))  # الأعمدة المطلوبة بس (أسرع بكتير)
             except Exception:  # noqa: BLE001
                 raw = xl.parse(sh)
             ok[sh] = _clean(raw)
@@ -205,7 +253,8 @@ DEFAULT_CHEER = "السباق بدأ… ومين بيوصل للقمة أول؟"
 
 def build_html(companies, period, mode, currency, top_n=15, confetti=False, date=None,
                cheer=DEFAULT_CHEER, auto_secs=15, auto_start=False, winners=3, show_name=True) -> str:
-    """companies = [{name, df, target, photo(bytes|None)}] بالترتيب اللي هيتعرض."""
+    """companies = [{name, branch(None|str), df, target, photo(bytes|None)}] بالترتيب اللي هيتعرض.
+    الشركة اللي فيها فروع بتتمرر كعنصر لكل فرع (شوف split_branches)."""
     esc = html.escape
     date = date or datetime.date.today()
     headline, period_label = PERIODS[period]
@@ -228,40 +277,53 @@ def build_html(companies, period, mode, currency, top_n=15, confetti=False, date
             slides += _progress(df, target, currency, top_n, photo_src, sub_p, cheer)
         if mode in ("finale", "both"):
             slides += _finale(df, target, currency, photo_src, headline, sub_f, winners)
-        sections.append(f'<section class="co" data-name="{esc(c["name"], True)}">{slides}</section>')
+        br_attr = f' data-branch="{esc(c["branch"], True)}"' if c.get("branch") else ""
+        sections.append(f'<section class="co" data-name="{esc(c["name"], True)}"{br_attr}>{slides}</section>')
         if i == 0:
             first_title = "أرقام تتحرك... ونتائج تقول مين الأقوى" if start == "progress" else headline
             first_sub = sub_p if start == "progress" else sub_f
 
-    names = [c["name"] for c in companies]
+    names = list(dict.fromkeys(c["name"] for c in companies))  # أسماء الشركات (من غير تكرار)
+    n_units = len(companies)  # عدد الشاشات: شركة × فرع
+    has_branch = any(c.get("branch") for c in companies)
     chev_r = '<svg viewBox="0 0 24 24"><polyline points="9 5 16 12 9 19"/></svg>'
     chev_l = '<svg viewBox="0 0 24 24"><polyline points="15 5 8 12 15 19"/></svg>'
     caret = '<svg class="caret" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>'
     clock = ('<button class="nav clk off" id="clk" type="button" aria-pressed="false" title="تبديل تلقائي بين الشركات">'
              '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><polyline points="12 7.5 12 12 15.5 14"/>'
              '<line class="sl" x1="4" y1="20" x2="20" y2="4"/></svg></button>')
+    arrows = (f'<button class="nav" id="prev" type="button" aria-label="السابق">{chev_r}</button>',
+              f'<button class="nav" id="next" type="button" aria-label="التالي">{chev_l}</button>')
     if not show_name:
-        # من غير اسم: أسهم الشركات والساعة بس
-        switch = ("" if len(names) == 1 else
-                  '<div class="switch">'
-                  f'<button class="nav" id="prev" type="button" aria-label="السابق">{chev_r}</button>'
-                  f'<button class="nav" id="next" type="button" aria-label="التالي">{chev_l}</button>'
-                  f'{clock}</div>')
-    elif len(names) == 1:
-        switch = f'<div class="switch"><span class="name static"><span class="nt" id="coName">{esc(names[0])}</span></span></div>'
+        # من غير اسم: أسهم التنقل والساعة بس
+        switch = "" if n_units == 1 else f'<div class="switch">{arrows[0]}{arrows[1]}{clock}</div>'
+    elif n_units == 1:
+        first = companies[0]
+        br = (f'<span class="name br static"><span class="nt">{esc(first["branch"])}</span></span>'
+              if first.get("branch") else "")
+        switch = (f'<div class="switch"><span class="name static"><span class="nt" id="coName">{esc(first["name"])}</span></span>'
+                  f'{br}</div>')
     else:
-        items = "".join(f'<li data-i="{i}"><button type="button">{esc(n)}</button></li>' for i, n in enumerate(names))
+        first_idx = {}
+        for i, c in enumerate(companies):
+            first_idx.setdefault(c["name"], i)
+        items = "".join(
+            f'<li data-i="{first_idx[n]}" data-co="{esc(n, True)}"><button type="button">{esc(n)}</button></li>' for n in names)
+        if len(names) > 1:
+            co_box = (f'<div class="pick"><button class="name" id="coBtn" type="button" aria-haspopup="true">'
+                      f'<span class="nt" id="coName">{esc(names[0])}</span>{caret}</button>'
+                      f'<ul class="list" id="coList" hidden>{items}</ul></div>')
+        else:
+            co_box = f'<span class="name static"><span class="nt" id="coName">{esc(names[0])}</span></span>'
+        # مربع الفرع: بيظهر بس مع الشركات اللي فيها فروع، وقايمته بتتبني من الجافاسكريبت
+        br_box = ('<div class="pick" id="brPick" hidden><button class="name br" id="brBtn" type="button" aria-haspopup="true">'
+                  f'<span class="nt" id="brName"></span>{caret}</button>'
+                  '<ul class="list" id="brList" hidden></ul></div>') if has_branch else ""
         switch = (
             '<div class="switch">'
-            f'<button class="nav" id="prev" type="button" aria-label="الشركة السابقة">{chev_r}</button>'
-            f'<div class="pick"><button class="name" id="coBtn" type="button" aria-haspopup="true">'
-            f'<span class="nt" id="coName">{esc(names[0])}</span>{caret}</button>'
-            f'<ul class="list" id="coList" hidden>{items}</ul></div>'
-            f'<button class="nav" id="next" type="button" aria-label="الشركة التالية">{chev_l}</button>'
-            f'<span class="cnt" id="coCnt">1 / {len(names)}</span>'
-            '<button class="nav clk off" id="clk" type="button" aria-pressed="false" title="تبديل تلقائي بين الشركات">'
-            '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><polyline points="12 7.5 12 12 15.5 14"/>'
-            '<line class="sl" x1="4" y1="20" x2="20" y2="4"/></svg></button></div>')
+            f'{arrows[0]}{co_box}{br_box}{arrows[1]}'
+            f'<span class="cnt" id="coCnt">1 / {n_units}</span>'
+            f'{clock}</div>')
 
     tabs = ""
     if mode == "both":
@@ -339,7 +401,9 @@ button.name:hover{background:rgba(255,255,255,.2)}
 .cnt{font-size:clamp(.75rem,1.9vh,1.1rem);color:var(--mist);font-variant-numeric:tabular-nums;direction:ltr;unicode-bidi:isolate}
 .list{position:absolute;top:calc(100% + 1vh);inset-inline-start:0;min-width:16vw;max-height:52vh;overflow:auto;list-style:none;
   background:#fff;color:var(--navy);border-radius:14px;padding:.8vh;box-shadow:0 18px 40px rgba(0,0,0,.45);z-index:30}
-.list[hidden]{display:none}
+.list[hidden],.pick[hidden]{display:none}
+.name.br{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.5)}
+.name.br.single{cursor:default}.name.br.single .caret{display:none}
 .list button{display:block;width:100%;text-align:start;padding:1vh 1vw;border-radius:10px;font-weight:700;font-size:clamp(.9rem,2.2vh,1.3rem)}
 .list button:hover,.list li.cur button{background:#E4EAFA}
 h1{font-size:clamp(1.6rem,5.6vh,3.6rem);font-weight:900;line-height:1.15;margin-top:.9vh}
@@ -448,6 +512,7 @@ __CANVAS__
   var cur=(MODE==='finale')?'finale':'progress', timer=null;
   var $=function(id){return document.getElementById(id)};
   var nameEl=$('coName'), cntEl=$('coCnt'), list=$('coList'), btn=$('coBtn');
+  var brPick=$('brPick'), brBtn=$('brBtn'), brList=$('brList'), brName=$('brName');
   var tabs=[].slice.call(document.querySelectorAll('.tabs button'));
 
   /* كونفيتي هادي (اختياري) */
@@ -468,6 +533,23 @@ __CANVAS__
     if(P.length)requestAnimationFrame(tick);else{run=false;cx.clearRect(0,0,W,H);}
   }
 
+  /* مربع الفرع: بيظهر بس لو الشاشة الحالية ليها فرع، وقايمته = فروع نفس الشركة */
+  function syncBranch(act){
+    if(!brPick)return;
+    var b=act.getAttribute('data-branch'), co=act.getAttribute('data-name');
+    if(!b){brPick.hidden=true;return;}
+    brPick.hidden=false;brName.textContent=b;brList.innerHTML='';
+    cos.forEach(function(c,i){
+      if(c.getAttribute('data-name')!==co||!c.getAttribute('data-branch'))return;
+      var li=document.createElement('li'),bt=document.createElement('button');
+      bt.type='button';bt.textContent=c.getAttribute('data-branch');
+      if(i===ci)li.className='cur';
+      bt.addEventListener('click',function(){pick(i)});
+      li.appendChild(bt);brList.appendChild(li);
+    });
+    brList.hidden=true;brBtn.classList.toggle('single',brList.children.length<2);
+  }
+
   function show(){
     cos.forEach(function(c,i){c.classList.toggle('on',i===ci)});
     var act=cos[ci];
@@ -476,7 +558,8 @@ __CANVAS__
     if(s){$('ttl').textContent=s.getAttribute('data-title');$('sub').textContent=s.getAttribute('data-sub');}
     if(nameEl)nameEl.textContent=act.getAttribute('data-name');
     if(cntEl)cntEl.textContent=(ci+1)+' / '+n;
-    if(list){list.hidden=true;[].forEach.call(list.children,function(li,i){li.classList.toggle('cur',i===ci)});}
+    if(list){list.hidden=true;[].forEach.call(list.children,function(li){li.classList.toggle('cur',li.getAttribute('data-co')===act.getAttribute('data-name'))});}
+    syncBranch(act);
     tabs.forEach(function(b){b.classList.toggle('on',b.getAttribute('data-k')===cur)});
     if(cur==='finale'&&CONF)burst();
   }
@@ -499,9 +582,10 @@ __CANVAS__
 
   if($('prev'))$('prev').addEventListener('click',function(){go(-1)});
   if($('next'))$('next').addEventListener('click',function(){go(1)});
-  if(btn)btn.addEventListener('click',function(e){e.stopPropagation();list.hidden=!list.hidden});
-  if(list)[].forEach.call(list.children,function(li,i){li.firstChild.addEventListener('click',function(){pick(i)})});
-  document.addEventListener('click',function(){if(list)list.hidden=true});
+  if(btn)btn.addEventListener('click',function(e){e.stopPropagation();if(brList)brList.hidden=true;list.hidden=!list.hidden});
+  if(brBtn)brBtn.addEventListener('click',function(e){e.stopPropagation();if(brList.children.length<2)return;if(list)list.hidden=true;brList.hidden=!brList.hidden});
+  if(list)[].forEach.call(list.children,function(li){li.firstChild.addEventListener('click',function(){pick(+li.getAttribute('data-i'))})});
+  document.addEventListener('click',function(){if(list)list.hidden=true;if(brList)brList.hidden=true});
   tabs.forEach(function(b){b.addEventListener('click',function(){cur=b.getAttribute('data-k');show();schedule();})});
   document.addEventListener('keydown',function(e){
     if(n<2)return;
