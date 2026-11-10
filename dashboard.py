@@ -473,7 +473,7 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .d9{left:calc(92.1vw - 1.7vh);top:87.2vh}.d10{left:calc(92.1vw - 1.7vh);top:90.6vh}
 
 /* ---- الرأس ---- */
-.head{display:flex;align-items:flex-start;gap:2.2vw;height:16vh;position:relative;z-index:3}
+.head{display:flex;align-items:flex-start;gap:2.2vw;min-height:16vh;flex:none;position:relative;z-index:3}
 .logo img{height:14vh;width:auto;display:block}
 .tb{min-width:0;padding-top:.4vh}
 .switch{display:inline-flex;align-items:center;gap:.6vw}
