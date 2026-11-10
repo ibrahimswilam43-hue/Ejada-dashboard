@@ -5,7 +5,7 @@ import threading
 import streamlit as st
 import streamlit.components.v1 as components
 
-from branding import MODES, PERIODS, ejada_white_uri
+from branding import BRANCH_VIEWS, MODES, PERIODS, RANKS, REGIONS, ejada_white_uri
 
 CHEERS = [
     "السباق بدأ… ومين بيوصل للقمة أول؟",
@@ -60,7 +60,12 @@ def show_html(page: str, height: int = 820):
         components.html(page, height=height, scrolling=False)
 
 
-NAVY, DEEP = "#13204F", "#0A1330"
+# ------------------------------------------------------------ نوع الداشبورد (فوق خالص)
+region = REGIONS[st.radio("نوع الداشبورد", list(REGIONS), horizontal=True, label_visibility="collapsed")]
+EG = region == "egypt"
+NAVY, DEEP, MID = ("#0E3A44", "#06151A", "#17606F") if EG else ("#13204F", "#0A1330", "#1A2C6E")
+hero_icon = '<div style="font-size:3.6rem;line-height:1">🏁</div>' if EG else f'<img src="{_logo()}" alt="إجادة لتحصيل الديون">'
+hero_title = "داشبورد سباق التحصيل" if EG else "داشبورد أفضل موظف تحصيل"
 
 st.markdown(
     f"""
@@ -71,7 +76,7 @@ st.markdown(
     .block-container {{direction:rtl;text-align:right;max-width:1180px;padding-top:1.4rem;padding-bottom:3rem;}}
 
     .hero {{display:flex;align-items:center;gap:26px;padding:20px 30px;border-radius:24px;color:#fff;position:relative;overflow:hidden;
-            background:linear-gradient(135deg,#1A2C6E 0%,{NAVY} 50%,{DEEP} 100%);
+            background:linear-gradient(135deg,{MID} 0%,{NAVY} 50%,{DEEP} 100%);
             box-shadow:0 18px 40px rgba(10,19,48,.30);margin-bottom:1.2rem;}}
     .hero::after {{content:"";position:absolute;left:-40px;top:-60px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.06);}}
     .hero img {{height:100px;display:block;}}
@@ -98,9 +103,9 @@ st.markdown(
     .co-top span {{color:#4A5A8A;font-weight:600;}}
     </style>
     <div class="hero">
-      <img src="{_logo()}" alt="إجادة لتحصيل الديون">
+      {hero_icon}
       <div>
-        <h1>داشبورد أفضل موظف تحصيل</h1>
+        <h1>{hero_title}</h1>
         <p>ارفع ملف الإكسيل (شيت لكل شركة)، حدّد التارجت، واختار طريقة العرض على شاشة الشركة.</p>
         <span class="dm"></span><span class="dm"></span><span class="dm"></span><span class="dm"></span>
       </div>
@@ -123,6 +128,10 @@ with st.container(border=True, key="card_settings"):
     winners = st.radio("عدد الفائزين في لوحة النهاية", [1, 2, 3], index=2, horizontal=True,
                        format_func=lambda n: {1: "الأول فقط", 2: "أول 2", 3: "أول 3"}[n], disabled=(mode == "progress"))
     show_name = st.radio("إظهار اسم الشركة في الداشبورد", ["نعم", "لا (الأسهم والساعة بس)"], horizontal=True) == "نعم"
+    bv_label = st.radio("عرض الفروع (للشركات اللي فيها فروع)", list(BRANCH_VIEWS), index=2, horizontal=True)
+    branch_view = BRANCH_VIEWS[bv_label]
+    rank_label = st.radio("الفرع الأعلى يتحدد حسب", list(RANKS), horizontal=True, disabled=(branch_view == "separate"))
+    branch_rank = RANKS[rank_label]
     d1, d2 = st.columns(2)
     auto_secs = d1.number_input("مدة كل شاشة بالثواني (للتبديل التلقائي بين الشركات)", min_value=3, max_value=600, value=15, step=1)
     auto_start = d2.checkbox("ابدأ والتبديل التلقائي شغّال (الساعة جنب اسم الشركة تقفله وتشغّله)", value=False)
@@ -221,11 +230,11 @@ if excel:
         else:
             companies = []  # عنصر لكل شركة، أو لكل فرع لو الشركة فيها فروع (بنفس الترتيب: الشركة وبعدها فروعها)
             for n, (df, t, photos) in inputs.items():
-                companies += _dash().split_branches(n, df, float(t), photos)
+                companies += _dash().split_branches(n, df, float(t), photos, branch_view)
             st.session_state["html"] = _dash().build_html(
                 companies, period, mode, currency.strip(), top_n=top_n, confetti=confetti,
                 cheer=cheer, auto_secs=int(auto_secs), auto_start=auto_start, winners=winners,
-                show_name=show_name,
+                show_name=show_name, region=region, branch_rank=branch_rank,
             )
             st.session_state["fname"] = f"top_collector_{datetime.date.today():%Y%m%d}.html"
 

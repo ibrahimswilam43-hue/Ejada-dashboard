@@ -8,7 +8,7 @@ import math
 import pandas as pd
 from PIL import Image, ImageOps
 
-from branding import EJADA_LOGO, MODES, PERIODS, ejada_white_uri  # noqa: F401  (بيتستخدموا هنا وفي app.py)
+from branding import EJADA_LOGO, MODES, PERIODS, PERIODS_EG, ejada_white_uri  # noqa: F401  (بيتستخدموا هنا وفي app.py)
 
 TOTAL_WORDS = {"الإجمالي", "الاجمالي", "اجمالي", "إجمالي", "المجموع", "مجموع",
                "total", "grand total", "sum"}
@@ -16,6 +16,33 @@ TOTAL_WORDS = {"الإجمالي", "الاجمالي", "اجمالي", "إجما
 
 BRANCH_WORDS = ("فرع", "فروع", "branch")
 NO_BRANCH = "بدون فرع"
+CMP_LABEL = "مقارنة الفروع"
+PROG_TITLE = "أرقام تتحرك... ونتائج تقول مين الأقوى"
+
+# ثيم مصر: درجات تيل غامق + دهبي، ومن غير لوجو إجادة
+EG_CSS = """
+:root{--navy:#0E3A44;--deep:#06151A;--mist:#CDE3E0;--acc:#F2B94B}
+.page{background:linear-gradient(160deg,#17606F 0%,var(--navy) 46%,var(--deep) 100%)}
+.dm{background:var(--acc)}
+.crown{stroke:var(--acc)}
+.avring,.avs{border-color:var(--acc)}
+.pbar i,.track i{background:linear-gradient(90deg,#F2B94B,#FFD98A)}
+.track i{background:linear-gradient(0deg,#E8A83A,#FFD98A)}
+.pill{background:var(--acc);color:#06151A}
+.r1 .block{background:var(--acc);color:#06151A}
+.pct{color:var(--acc)}
+.tabs button.on{background:var(--acc);color:#06151A}
+.nav:hover,.nav:focus-visible,.clk:not(.off){background:var(--acc);color:#06151A}
+.bc.lead{background:rgba(242,185,75,.14)}
+.flag{height:11vh;width:11vh;display:block}
+"""
+FLAG_SVG = ('<svg class="flag" viewBox="0 0 64 64" aria-hidden="true"><path d="M14 6V60" stroke="#F2B94B" stroke-width="4" stroke-linecap="round"/>'
+            '<g fill="#fff"><rect x="18" y="8" width="9" height="9"/><rect x="36" y="8" width="9" height="9"/>'
+            '<rect x="27" y="17" width="9" height="9"/><rect x="45" y="17" width="9" height="9"/>'
+            '<rect x="18" y="26" width="9" height="9"/><rect x="36" y="26" width="9" height="9"/></g>'
+            '<g fill="#F2B94B"><rect x="27" y="8" width="9" height="9"/><rect x="45" y="8" width="9" height="9"/>'
+            '<rect x="18" y="17" width="9" height="9"/><rect x="36" y="17" width="9" height="9"/>'
+            '<rect x="27" y="26" width="9" height="9"/><rect x="45" y="26" width="9" height="9"/></g></svg>')
 
 
 # ---------------------------------------------------------------- البيانات
@@ -66,17 +93,23 @@ def branch_list(df) -> list:
     return [str(b) for b in cats]
 
 
-def split_branches(name, df, target, photos=None) -> list:
-    """شركة -> عناصر العرض: عنصر لكل فرع (أو عنصر واحد لو من غير فروع). photos = {اسم الفرع أو None: bytes}."""
+def split_branches(name, df, target, photos=None, view="all") -> list:
+    """شركة -> عناصر العرض: عنصر لكل فرع (أو عنصر واحد لو من غير فروع). photos = {اسم الفرع أو None: bytes}.
+    view: separate = كل فرع لوحده | compare = شاشة مقارنة بين الفروع بس | all = المقارنة وبعدها كل فرع."""
     photos = photos or {}
     brs = branch_list(df)
     if not brs:
         return [{"name": name, "branch": None, "df": df, "target": target, "photo": photos.get(None)}]
-    return [
+    singles = [
         {"name": name, "branch": b, "target": target, "photo": photos.get(b),
          "df": df[df["branch"].astype(str) == b].reset_index(drop=True)}
         for b in brs
     ]
+    if len(brs) < 2 or view == "separate":
+        return singles
+    cmp_unit = {"name": name, "branch": CMP_LABEL, "cmp": True, "target": target, "df": df, "photo": None,
+                "branches": [{"branch": s["branch"], "df": s["df"], "photo": s["photo"]} for s in singles]}
+    return [cmp_unit] if view == "compare" else [cmp_unit] + singles
 
 
 def load_workbook(file):
@@ -226,7 +259,7 @@ def _cheer_html(text):
     return esc(text)
 
 
-def _progress(df, target, cur, top_n, photo_src, sub, cheer):
+def _progress(df, target, cur, top_n, photo_src, sub, cheer, title=PROG_TITLE):
     esc = html.escape
     rows = df.head(top_n)
     pcts = [r.amount / target * 100 for r in rows.itertuples()]
@@ -242,9 +275,53 @@ def _progress(df, target, cur, top_n, photo_src, sub, cheer):
           <span class="nm" title="{esc(r.emp, True)}">{esc(_short(r.emp))}</span>
         </div>""")
     legend = '<span class="legend"><u></u> الخط المتقطع = التارجت</span>' if over else ""
-    return (f'<div class="slide" data-k="progress" data-title="أرقام تتحرك... ونتائج تقول مين الأقوى" data-sub="{esc(sub, True)}">'
+    return (f'<div class="slide" data-k="progress" data-title="{esc(title, True)}" data-sub="{esc(sub, True)}">'
             f'<div class="chart">{legend}<div class="bars"><div class="arrow"></div>{"".join(cols)}</div>'
             f'<p class="cheer">{_cheer_html(cheer)}</p></div></div>')
+
+
+def _compare(brs, target, cur, rank, title, sub):
+    """شاشة مقارنة: كارت لكل فرع، والأعلى (حسب الإجمالي أو نسبة التارجت) متعلّم بتاج."""
+    esc = html.escape
+    st_ = []
+    for b in brs:
+        d = b["df"]
+        n, tot = len(d), float(d.amount.sum())
+        tgt = target * n
+        raw = tot / tgt * 100 if tgt else 0.0
+        st_.append({"name": b["branch"], "n": n, "tot": tot, "tgt": tgt, "raw": raw, "pct": int(math.floor(raw)),
+                    "top": d.iloc[0], "photo": photo_uri(b["photo"]) if b.get("photo") else None})
+    key = "tot" if rank == "total" else "raw"
+    st_.sort(key=lambda s: -s[key])
+    mx = max(s[key] for s in st_) or 1
+    cards = []
+    for k, s in enumerate(st_):
+        lead = k == 0 and (len(st_) < 2 or st_[0][key] != st_[1][key])
+        crown = ('<svg class="crown" viewBox="0 0 72 48" aria-hidden="true"><path d="M6 40 L12 12 L26 26 L36 6 L46 26 L60 12 L66 40 Z"/>'
+                 '<path d="M6 45 H66"/></svg>') if lead else ""
+        pill = '<span class="pill">الفرع الأعلى</span>' if lead else f'<span class="pill off">المركز {k + 1}</span>'
+        cards.append(f"""
+        <div class="bc{' lead' if lead else ''}">
+          {crown}{pill}
+          <h3 class="bn">{esc(s["name"])}</h3>
+          <div class="pa"><b>{_fmt(s["tot"])}</b><small>{esc(cur)}</small></div>
+          <div class="pbar"><i style="--w:{s[key] / mx * 100:.1f}%"></i></div>
+          <p class="pm"><b>{s["pct"]}%</b> من تارجت الفرع ({_fmt(s["tgt"])} {esc(cur)})</p>
+          <div class="bs"><span><b>{s["n"]}</b> موظف</span><span>متوسط الموظف <b>{_fmt(s["tot"] / s["n"])}</b></span></div>
+          <div class="bt"><div class="avs">{_avatar(s["photo"])}</div>
+            <div><small>الأعلى في الفرع</small><b>{esc(s["top"].emp)}</b><span>{_fmt(s["top"].amount)} {esc(cur)}</span></div></div>
+        </div>""")
+    gap = ""
+    if len(st_) >= 2:
+        d = st_[0][key] - st_[1][key]
+        if d == 0:
+            gap = "تعادل بين الفرعين"
+        elif rank == "total":
+            gap = f'{esc(st_[0]["name"])} متقدم على {esc(st_[1]["name"])} بفارق <b>{_fmt(d)} {esc(cur)}</b>'
+        else:
+            gap = f'{esc(st_[0]["name"])} متقدم على {esc(st_[1]["name"])} بفارق <b>{d:.1f} نقطة مئوية</b>'
+    return (f'<div class="slide" data-k="cmp" data-title="{esc(title, True)}" data-sub="{esc(sub, True)}">'
+            f'<div class="cmp"><div class="cmpr">{"".join(cards)}</div><p class="gap">{gap}</p></div></div>')
 
 
 # ---------------------------------------------------------------- الصفحة
@@ -252,18 +329,30 @@ DEFAULT_CHEER = "السباق بدأ… ومين بيوصل للقمة أول؟"
 
 
 def build_html(companies, period, mode, currency, top_n=15, confetti=False, date=None,
-               cheer=DEFAULT_CHEER, auto_secs=15, auto_start=False, winners=3, show_name=True) -> str:
+               cheer=DEFAULT_CHEER, auto_secs=15, auto_start=False, winners=3, show_name=True,
+               region="saudi", branch_rank="total") -> str:
     """companies = [{name, branch(None|str), df, target, photo(bytes|None)}] بالترتيب اللي هيتعرض.
     الشركة اللي فيها فروع بتتمرر كعنصر لكل فرع (شوف split_branches)."""
     esc = html.escape
     date = date or datetime.date.today()
-    headline, period_label = PERIODS[period]
+    eg = region == "egypt"
+    headline, period_label = (PERIODS_EG if eg else PERIODS)[period]
+    prog_title = "سباق التحصيل" if eg else PROG_TITLE
     start = "finale" if mode == "finale" else "progress"
     ds = date.strftime("%d/%m/%Y")
 
     sections, first_title, first_sub = [], "", ""
     for i, c in enumerate(companies):
         df, target = c["df"], c["target"]
+        if c.get("cmp"):
+            names_b = " × ".join(b["branch"] for b in c["branches"])
+            sub_c = f"{period_label} · {names_b} · بتاريخ {ds}"
+            sections.append(
+                f'<section class="co" data-name="{esc(c["name"], True)}" data-branch="{esc(c["branch"], True)}" data-cmp="1">'
+                f'{_compare(c["branches"], target, currency, branch_rank, CMP_LABEL, sub_c)}</section>')
+            if i == 0:
+                first_title, first_sub = CMP_LABEL, sub_c
+            continue
         photo_src = photo_uri(c["photo"]) if c.get("photo") else None
         n = len(df)
         shown = min(top_n, n)
@@ -274,13 +363,13 @@ def build_html(companies, period, mode, currency, top_n=15, confetti=False, date
         sub_f = f"{period_label} · {top_txt} · بتاريخ {ds}"
         slides = ""
         if mode in ("progress", "both"):
-            slides += _progress(df, target, currency, top_n, photo_src, sub_p, cheer)
+            slides += _progress(df, target, currency, top_n, photo_src, sub_p, cheer, prog_title)
         if mode in ("finale", "both"):
             slides += _finale(df, target, currency, photo_src, headline, sub_f, winners)
         br_attr = f' data-branch="{esc(c["branch"], True)}"' if c.get("branch") else ""
         sections.append(f'<section class="co" data-name="{esc(c["name"], True)}"{br_attr}>{slides}</section>')
         if i == 0:
-            first_title = "أرقام تتحرك... ونتائج تقول مين الأقوى" if start == "progress" else headline
+            first_title = prog_title if start == "progress" else headline
             first_sub = sub_p if start == "progress" else sub_f
 
     names = list(dict.fromkeys(c["name"] for c in companies))  # أسماء الشركات (من غير تكرار)
@@ -335,7 +424,8 @@ def build_html(companies, period, mode, currency, top_n=15, confetti=False, date
     page = TEMPLATE
     for k, v in {
         "__TITLE__": esc(f"{headline} - {', '.join(names)}"),
-        "__LOGO__": ejada_white_uri(),
+        "__LOGO_BLOCK__": FLAG_SVG if eg else f'<img src="{ejada_white_uri()}" alt="إجادة لتحصيل الديون">',
+        "__THEME_CSS__": EG_CSS if eg else "",
         "__SWITCH__": switch,
         "__H1__": esc(first_title),
         "__SUB__": esc(first_sub),
@@ -361,7 +451,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@500;700;900&display=swap" rel="stylesheet">
 <style>
-:root{--navy:#13204F;--deep:#0A1330;--mist:#C7D4F0;--line:rgba(255,255,255,.22);--soft:rgba(255,255,255,.10)}
+:root{--acc:#fff;--navy:#13204F;--deep:#0A1330;--mist:#C7D4F0;--line:rgba(255,255,255,.22);--soft:rgba(255,255,255,.10)}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
 body{font-family:'Cairo','Segoe UI',Tahoma,sans-serif;background:var(--deep);color:#fff;overflow:hidden}
@@ -479,6 +569,26 @@ h1{font-size:clamp(1.6rem,5.6vh,3.6rem);font-weight:900;line-height:1.15;margin-
   .pod{max-width:90vw}
 }
 @media (prefers-reduced-motion:reduce){.pbar i,.track i{animation:none}}
+
+/* ---- مقارنة الفروع ---- */
+.cmp{flex:1;min-height:0;display:flex;flex-direction:column;gap:1.6vh;padding-bottom:1vh}
+.cmpr{flex:1;min-height:0;display:flex;align-items:stretch;justify-content:center;gap:2.4vw}
+.bc{flex:1 1 0;max-width:30vw;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
+  padding:1.6vh 1.4vw;border-radius:24px;background:var(--soft);border:1.5px solid var(--line)}
+.bc.lead{background:rgba(255,255,255,.18);border:2.5px solid var(--acc);box-shadow:0 0 0 .8vh rgba(255,255,255,.06)}
+.pill.off{background:var(--soft);color:var(--mist);border:1px solid var(--line)}
+.bn{font-weight:900;font-size:clamp(1.3rem,4vh,2.6rem);margin-top:1vh;line-height:1.2;overflow-wrap:anywhere}
+.bs{display:flex;flex-wrap:wrap;justify-content:center;gap:.4vh 1.6vw;margin-top:.8vh;font-size:clamp(.75rem,1.9vh,1.15rem);color:var(--mist)}
+.bs b{color:#fff;font-weight:900}
+.bt{margin-top:1.4vh;padding-top:1.2vh;border-top:1px solid var(--line);width:100%;display:flex;align-items:center;justify-content:center;gap:.9vw;text-align:start}
+.bt small{display:block;color:var(--mist);font-size:clamp(.7rem,1.7vh,1rem)}
+.bt b{display:block;font-weight:800;font-size:clamp(.95rem,2.4vh,1.5rem)}
+.bt span{color:var(--mist);font-size:clamp(.75rem,1.9vh,1.1rem)}
+.bc .avs{width:6.4vh}
+.gap{text-align:center;padding-top:1.4vh;border-top:1px solid var(--line);font-weight:700;font-size:clamp(.95rem,2.6vh,1.6rem)}
+.gap b{font-weight:900}
+@media (max-width:900px){.cmpr{flex-direction:column;align-items:center}.bc{max-width:90vw;width:100%}}
+__THEME_CSS__
 </style>
 </head>
 <body>
@@ -491,7 +601,7 @@ __CANVAS__
   <i class="dm d6"></i><i class="dm d7"></i><i class="dm d8"></i><i class="dm d9"></i><i class="dm d10"></i>
 
   <header class="head">
-    <div class="logo"><img src="__LOGO__" alt="إجادة لتحصيل الديون"></div>
+    <div class="logo">__LOGO_BLOCK__</div>
     <div class="tb">
       __SWITCH__
       <h1 id="ttl">__H1__</h1>
@@ -554,7 +664,7 @@ __CANVAS__
     cos.forEach(function(c,i){c.classList.toggle('on',i===ci)});
     var act=cos[ci];
     [].forEach.call(act.querySelectorAll('.slide'),function(s){s.classList.toggle('on',s.getAttribute('data-k')===cur)});
-    var s=act.querySelector('.slide.on');
+    var s=act.querySelector('.slide.on')||act.querySelector('.slide');if(s)s.classList.add('on');
     if(s){$('ttl').textContent=s.getAttribute('data-title');$('sub').textContent=s.getAttribute('data-sub');}
     if(nameEl)nameEl.textContent=act.getAttribute('data-name');
     if(cntEl)cntEl.textContent=(ci+1)+' / '+n;
@@ -570,7 +680,7 @@ __CANVAS__
     if(!(MODE==='both'||(auto&&n>1)))return;
     timer=setTimeout(function(){
       if(MODE==='both'){
-        if(cur==='progress'){cur='finale';}
+        if(cur==='progress'&&!cos[ci].hasAttribute('data-cmp')){cur='finale';}
         else if(auto&&n>1){ci=(ci+1)%n;cur='progress';}
         else{cur='progress';}
       }else{ci=(ci+1)%n;}
