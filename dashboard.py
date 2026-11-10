@@ -571,7 +571,7 @@ h1{font-size:clamp(1.6rem,5.6vh,3.6rem);font-weight:900;line-height:1.15;margin-
 @media (prefers-reduced-motion:reduce){.pbar i,.track i{animation:none}}
 
 /* ---- مقارنة الفروع ---- */
-.cmp{flex:1;min-height:0;display:flex;flex-direction:column;gap:1.6vh;padding-bottom:1vh}
+.cmp{flex:1;min-height:0;display:flex;flex-direction:column;gap:1.6vh;padding:3vh 0 1vh}
 .cmpr{flex:1;min-height:0;display:flex;align-items:stretch;justify-content:center;gap:2.4vw}
 .bc{flex:1 1 0;max-width:30vw;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;
   padding:1.6vh 1.4vw;border-radius:24px;background:var(--soft);border:1.5px solid var(--line)}

@@ -63,6 +63,9 @@ def show_html(page: str, height: int = 820):
 # ------------------------------------------------------------ نوع الداشبورد (فوق خالص)
 region = REGIONS[st.radio("نوع الداشبورد", list(REGIONS), horizontal=True, label_visibility="collapsed")]
 EG = region == "egypt"
+if st.session_state.get("html_region", region) != region:  # غيّرت النوع: الداشبورد القديم مبقاش مناسب
+    st.session_state.pop("html", None)
+st.session_state["html_region"] = region
 NAVY, DEEP, MID = ("#0E3A44", "#06151A", "#17606F") if EG else ("#13204F", "#0A1330", "#1A2C6E")
 hero_icon = '<div style="font-size:3.6rem;line-height:1">🏁</div>' if EG else f'<img src="{_logo()}" alt="إجادة لتحصيل الديون">'
 hero_title = "داشبورد سباق التحصيل" if EG else "داشبورد أفضل موظف تحصيل"
@@ -73,7 +76,7 @@ st.markdown(
     .stApp, .stMarkdown, .stMarkdown p, label, h1, h2, h3, button, input, textarea {{font-family:'Segoe UI',Tahoma,'Source Sans Pro',sans-serif;}}
     .stApp {{background:linear-gradient(180deg,#E4E9F6 0%,#F5F7FC 60%);}}
     header[data-testid="stHeader"] {{background:transparent;}}
-    .block-container {{direction:rtl;text-align:right;max-width:1180px;padding-top:1.4rem;padding-bottom:3rem;}}
+    .block-container {{direction:rtl;text-align:right;max-width:1180px;padding-top:4.4rem;padding-bottom:3rem;}}
 
     .hero {{display:flex;align-items:center;gap:26px;padding:20px 30px;border-radius:24px;color:#fff;position:relative;overflow:hidden;
             background:linear-gradient(135deg,{MID} 0%,{NAVY} 50%,{DEEP} 100%);
